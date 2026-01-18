@@ -26,7 +26,7 @@
     code { background: #f6f6f6; padding: 2px 6px; border-radius: 6px; }
   </style>
 
-  <!-- TFJS + Speech Commands (Teachable Machine compatible) -->
+  <!-- TFJS + Speech Commands -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/speech-commands@0.5.4/dist/speech-commands.min.js"></script>
 </head>
@@ -50,12 +50,6 @@
         <div id="thrVal" style="width:50px; text-align:right;">0.70</div>
       </div>
 
-      <div class="label">
-        <div style="width:110px;">Hold frames</div>
-        <input id="hold" type="range" min="1" max="12" step="1" value="4" />
-        <div id="holdVal" style="width:50px; text-align:right;">4</div>
-      </div>
-
       <h3 style="font-size:28px; margin:18px 0 10px;">If it’s noisy, use buttons:</h3>
       <div class="btnrow">
         <button class="poseBtn" data-pose="Sit">Sit</button>
@@ -73,8 +67,7 @@
 
       <div class="hr"></div>
       <div class="small">
-        Setup: Put your Teachable Machine exported files in <code>./model/</code>:
-        <code>model.json</code>, <code>metadata.json</code>, <code>weights.bin</code>.
+        Required files in <code>./model/</code>: <code>model.json</code>, <code>metadata.json</code>, <code>weights.bin</code>.
         Images in site root: <code>pet-stand.png</code>, <code>pet-sit.png</code>, <code>pet-jump.png</code>, <code>pet-sleep.png</code>.
       </div>
     </div>
@@ -84,32 +77,39 @@
       <div class="petbox">
         <img id="petImg" src="pet-stand.png" alt="pet" />
       </div>
-      <h3 id="poseTitle" style="font-size:34px; margin:18px 0 6px;">Standing (from Buttons)</h3>
+      <h3 id="poseTitle" style="font-size:34px; margin:18px 0 6px;">Stand (from Buttons)</h3>
       <div class="muted">Tip: keep the mic close to the child’s mouth.</div>
     </div>
   </div>
 
 <script>
-  // ====== IMPORTANT: Your model labels are: Background Noise, Jump, Sit, Sleep, Stand ======
-  // Source: metadata.json wordLabels :contentReference[oaicite:1]{index=1}
-  const LABEL_TO_IMAGE = {
+  const MODEL_URL = "./model/model.json";
+  const METADATA_URL = "./model/metadata.json";
+
+  // Robust mapping (handles casing/spacing)
+  function normalizeLabel(s) {
+    return String(s || "").trim().toLowerCase();
+  }
+
+  function labelToPose(label) {
+    const L = normalizeLabel(label);
+    if (L === "sit") return "Sit";
+    if (L === "jump") return "Jump";
+    if (L === "sleep") return "Sleep";
+    if (L === "stand") return "Stand";
+    if (L === "background noise") return "Background Noise";
+    return label; // fallback
+  }
+
+  const POSE_TO_IMAGE = {
     "Sit": "pet-sit.png",
     "Jump": "pet-jump.png",
     "Sleep": "pet-sleep.png",
-    "Stand": "pet-stand.png",
-    "Background Noise": "pet-stand.png" // never actively chosen, but safe fallback
+    "Stand": "pet-stand.png"
   };
-
-  const MODEL_BASE = "./model/";
-  const MODEL_URL = MODEL_BASE + "model.json";
-  const METADATA_URL = MODEL_BASE + "metadata.json";
 
   let recognizer = null;
   let isListening = false;
-
-  // Stability (debounce) state
-  let lastCandidate = null;
-  let candidateCount = 0;
   let activePose = "Stand";
 
   const elStart = document.getElementById("btnStart");
@@ -119,34 +119,34 @@
   const elPills = document.getElementById("pills");
   const elImg = document.getElementById("petImg");
   const elPoseTitle = document.getElementById("poseTitle");
-
   const elThr = document.getElementById("thr");
   const elThrVal = document.getElementById("thrVal");
-  const elHold = document.getElementById("hold");
-  const elHoldVal = document.getElementById("holdVal");
 
   function setStatus(msg) { elStatus.textContent = msg; }
 
   function setPose(pose, source) {
-    // Normalize to exact label casing
     const p = pose;
-    const img = LABEL_TO_IMAGE[p] || "pet-stand.png";
+    const baseImg = POSE_TO_IMAGE[p] || "pet-stand.png";
 
-    // Only update if changed (prevents flicker and needless DOM updates)
-    if (activePose !== p) {
-      activePose = p;
-      elImg.src = img;
-    }
+    // Force reload even if browser caches aggressively
+    const cacheBust = "v=" + Date.now();
+    elImg.src = baseImg + "?" + cacheBust;
+
+    activePose = p;
     elPoseTitle.textContent = `${p} (from ${source})`;
+
+    // Debug: visible proof that UI update ran
+    console.log("[POSE]", p, "=>", elImg.src);
   }
 
   function updatePills(scores, labels) {
-    // show top few + background
     elPills.innerHTML = "";
     const pairs = labels.map((lab, i) => ({ lab, score: scores[i] }));
     pairs.sort((a, b) => b.score - a.score);
 
-    // show up to 5 pills
+    const top = pairs[0];
+    elTop.textContent = `Top: ${top.lab} (${Math.round(top.score * 100)}%)`;
+
     for (const p of pairs.slice(0, 5)) {
       const pct = Math.round(p.score * 100);
       const div = document.createElement("div");
@@ -154,74 +154,32 @@
       div.textContent = `${p.lab}: ${pct}%`;
       elPills.appendChild(div);
     }
-    elTop.textContent = `Top: ${pairs[0].lab} (${Math.round(pairs[0].score * 100)}%)`;
   }
 
-  function pickStableCommand(scores, labels) {
-    const threshold = parseFloat(elThr.value);
-    const holdFrames = parseInt(elHold.value, 10);
-
-    // Find top label
+  function getTop(scores, labels) {
     let topIdx = 0;
     for (let i = 1; i < scores.length; i++) {
       if (scores[i] > scores[topIdx]) topIdx = i;
     }
-    const topLabel = labels[topIdx];
-    const topScore = scores[topIdx];
-
-    // Ignore background noise entirely for pose switching
-    if (topLabel === "Background Noise") {
-      lastCandidate = null;
-      candidateCount = 0;
-      return null;
-    }
-
-    // Must exceed threshold
-    if (topScore < threshold) {
-      lastCandidate = null;
-      candidateCount = 0;
-      return null;
-    }
-
-    // Debounce: require N consecutive frames of same command
-    if (topLabel === lastCandidate) {
-      candidateCount += 1;
-    } else {
-      lastCandidate = topLabel;
-      candidateCount = 1;
-    }
-
-    if (candidateCount >= holdFrames) {
-      candidateCount = 0;
-      lastCandidate = null;
-      return topLabel;
-    }
-
-    return null;
+    return { label: labels[topIdx], score: scores[topIdx] };
   }
 
   async function loadRecognizer() {
     if (recognizer) return recognizer;
 
-    // Use Speech Commands custom model loader
-    recognizer = speechCommands.create(
-      "BROWSER_FFT",
-      undefined,
-      MODEL_URL,
-      METADATA_URL
-    );
-
+    recognizer = speechCommands.create("BROWSER_FFT", undefined, MODEL_URL, METADATA_URL);
     setStatus("Loading model...");
     await recognizer.ensureModelLoaded();
 
-    // Validate labels match expected (your model has 5 classes) :contentReference[oaicite:2]{index=2}
     const labels = recognizer.wordLabels();
+    console.log("[LABELS]", labels);
+
+    // Hard check: if labels missing, your uploaded model is wrong.
     const required = ["Background Noise", "Jump", "Sit", "Sleep", "Stand"];
     const missing = required.filter(x => !labels.includes(x));
     if (missing.length) {
-      throw new Error("Model labels missing: " + missing.join(", ") + ". Found: " + labels.join(", "));
+      throw new Error("Missing labels: " + missing.join(", ") + ". Found: " + labels.join(", "));
     }
-
     return recognizer;
   }
 
@@ -232,40 +190,39 @@
       await loadRecognizer();
     } catch (e) {
       console.error(e);
-      setStatus("Model not found / cannot load. " + e.message);
+      setStatus("Model not found / cannot load: " + e.message);
       return;
     }
 
     const labels = recognizer.wordLabels();
-
     isListening = true;
     elStart.disabled = true;
     elStop.disabled = false;
-
     setStatus("Listening… Speak: Sit / Jump / Sleep");
 
-    // Reset stability state
-    lastCandidate = null;
-    candidateCount = 0;
+    await recognizer.listen((result) => {
+      const scores = Array.from(result.scores);
+      updatePills(scores, labels);
 
-    await recognizer.listen(
-      (result) => {
-        const scores = Array.from(result.scores);
-        updatePills(scores, labels);
+      const thr = parseFloat(elThr.value);
+      const top = getTop(scores, labels);
 
-        const stableCmd = pickStableCommand(scores, labels);
-        if (stableCmd) {
-          // Apply command to pet
-          setPose(stableCmd, "Voice");
-        }
-      },
-      {
-        includeSpectrogram: false,
-        probabilityThreshold: 0.0, // we do our own threshold logic
-        invokeCallbackOnNoiseAndUnknown: true,
-        overlapFactor: 0.5
+      const pose = labelToPose(top.label);
+
+      // Ignore noise; require confidence threshold
+      if (pose === "Background Noise") return;
+      if (top.score < thr) return;
+
+      // Switch immediately (no hold-frames logic)
+      if (pose !== activePose) {
+        setPose(pose, "Voice");
       }
-    );
+    }, {
+      includeSpectrogram: false,
+      probabilityThreshold: 0.0,
+      invokeCallbackOnNoiseAndUnknown: true,
+      overlapFactor: 0.5
+    });
   }
 
   async function stopListening() {
@@ -273,29 +230,23 @@
     isListening = false;
     elStart.disabled = false;
     elStop.disabled = true;
-
     try { recognizer.stopListening(); } catch (_) {}
     setStatus("Stopped. Click Start Listening.");
   }
 
-  // UI wiring
+  // UI
   elStart.addEventListener("click", startListening);
   elStop.addEventListener("click", stopListening);
 
   elThr.addEventListener("input", () => elThrVal.textContent = Number(elThr.value).toFixed(2));
-  elHold.addEventListener("input", () => elHoldVal.textContent = String(elHold.value));
+  elThrVal.textContent = Number(elThr.value).toFixed(2);
 
   document.querySelectorAll(".poseBtn").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const pose = btn.getAttribute("data-pose");
-      setPose(pose, "Buttons");
-    });
+    btn.addEventListener("click", () => setPose(btn.getAttribute("data-pose"), "Buttons"));
   });
 
-  // Default
+  // Default pose
   setPose("Stand", "Buttons");
-  elThrVal.textContent = Number(elThr.value).toFixed(2);
-  elHoldVal.textContent = String(elHold.value);
 </script>
 </body>
 </html>
