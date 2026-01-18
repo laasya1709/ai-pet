@@ -67,112 +67,78 @@
     <div class="card">
       <h2>Pet</h2>
       <div class="petStage">
-        <img id="petImg" src="pet-stand.png?v=1" alt="AI Pet" />
+        <img id="petImg" src="pet-stand.png" alt="AI Pet" />
       </div>
       <div id="petText" style="font-size:18px; margin-top:8px;">Waiting…</div>
       <p class="muted">Tip: keep the mic close to the child’s mouth.</p>
     </div>
   </div>
 
+  <!--
+    Dependency loading notes:
+    - Your screenshots show "tmAudio is not defined" AND the Network tab shows
+      teachablemachine-audio.min.js failing to load.
+    - That happens when the Teachable Machine Audio library script is blocked
+      (common on school networks) or the CDN has a transient failure.
+    - Fix: load dependencies with a fallback list (jsDelivr + unpkg).
+  -->
   <script>
-    // ==========================
-    // Robust dependency loader
-    // ==========================
-    function loadScriptWithFallback(urls, { timeoutMs = 12000 } = {}) {
+    // Load a script with fallback URLs. Returns when the script is available.
+    function loadScriptWithFallback(urls, globalName) {
       return new Promise((resolve, reject) => {
-        let idx = 0;
-
-        const tryNext = (lastErr) => {
-          if (idx >= urls.length) {
-            reject(lastErr || new Error("All script URLs failed"));
+        let i = 0;
+        const tryNext = () => {
+          if (i >= urls.length) {
+            reject(new Error(`Failed loading ${globalName || 'script'} from all CDNs.`));
             return;
           }
-
-          const url = urls[idx++];
-          const s = document.createElement("script");
+          const url = urls[i++];
+          const s = document.createElement('script');
           s.src = url;
           s.async = true;
-
-          let done = false;
-          const timer = setTimeout(() => {
-            if (done) return;
-            done = true;
-            s.remove();
-            tryNext(new Error(`Timeout loading: ${url}`));
-          }, timeoutMs);
-
-          s.onload = () => {
-            if (done) return;
-            done = true;
-            clearTimeout(timer);
-            resolve(url);
-          };
-
+          s.crossOrigin = 'anonymous';
+          s.onload = () => resolve(url);
           s.onerror = () => {
-            if (done) return;
-            done = true;
-            clearTimeout(timer);
             s.remove();
-            tryNext(new Error(`Failed loading: ${url}`));
+            tryNext();
           };
-
           document.head.appendChild(s);
         };
-
+        // If the global is already present, skip loading.
+        if (globalName && window[globalName]) {
+          resolve('already-loaded');
+          return;
+        }
         tryNext();
       });
     }
 
-    async function ensureLibrariesLoaded() {
-      // If already loaded, skip.
-      if (window.tf && window.tmAudio) return;
+    // Ensure TFJS + TeachableMachine Audio are available.
+    async function ensureDeps() {
+      // Your screenshots show the TeachableMachine Audio helper script being blocked
+      // ("tmAudio is not defined" + Network failures). To avoid that dependency,
+      // we use the TensorFlow SpeechCommands API directly.
+      await loadScriptWithFallback(
+        [
+          'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js',
+          'https://unpkg.com/@tensorflow/tfjs@4.20.0/dist/tf.min.js'
+        ],
+        'tf'
+      );
 
-      // TensorFlow.js
-      if (!window.tf) {
-        await loadScriptWithFallback([
-          "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js",
-          "https://unpkg.com/@tensorflow/tfjs@4.20.0/dist/tf.min.js",
-          // last resort older stable:
-          "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.16.0/dist/tf.min.js"
-        ]);
-      }
-
-      // Teachable Machine Audio (THIS is what your Network panel shows failing)
-      if (!window.tmAudio) {
-        await loadScriptWithFallback([
-          // Pin to a specific version (more reliable than floating tags)
-          "https://cdn.jsdelivr.net/npm/@teachablemachine/audio@0.8.4/dist/teachablemachine-audio.min.js",
-          "https://unpkg.com/@teachablemachine/audio@0.8.4/dist/teachablemachine-audio.min.js",
-          // fallback to 0.8 if 0.8.4 is blocked/missing
-          "https://cdn.jsdelivr.net/npm/@teachablemachine/audio@0.8/dist/teachablemachine-audio.min.js",
-          "https://unpkg.com/@teachablemachine/audio@0.8/dist/teachablemachine-audio.min.js"
-        ]);
-      }
-
-      // Final sanity check
-      if (!window.tmAudio) {
-        throw new Error(
-          "Teachable Machine Audio library failed to load.\n\n" +
-          "Most common cause: adblock / school network filter blocking CDN.\n\n" +
-          "Fix:\n" +
-          "1) Disable adblock for this site OR allow cdn.jsdelivr.net and unpkg.com\n" +
-          "2) Try a different network\n" +
-          "3) Hard refresh (Ctrl+Shift+R)"
-        );
-      }
+      await loadScriptWithFallback(
+        [
+          // Match Teachable Machine TMv2 exports (metadata shows tfjsSpeechCommandsVersion 0.4.0)
+          'https://cdn.jsdelivr.net/npm/@tensorflow-models/speech-commands@0.4.0/dist/speech-commands.min.js',
+          'https://unpkg.com/@tensorflow-models/speech-commands@0.4.0/dist/speech-commands.min.js'
+        ],
+        'speechCommands'
+      );
     }
+  </script>
 
-    // ==========================
-    // App logic (your existing logic, made safe)
-    // ==========================
-    // Cache-buster: use ?v=100 like you're doing, otherwise timestamp
-    const V = new URLSearchParams(location.search).get("v") || String(Date.now());
-
-    // Always resolve against current page URL; works on GitHub Pages (/ai-pet/)
-    const MODEL_DIR = new URL("model/", window.location.href).toString();
-    const MODEL_JSON_URL = `${MODEL_DIR}model.json?v=${encodeURIComponent(V)}`;
-    const META_JSON_URL  = `${MODEL_DIR}metadata.json?v=${encodeURIComponent(V)}`;
-    const WEIGHTS_URL    = `${MODEL_DIR}weights.bin?v=${encodeURIComponent(V)}`;
+  <script>
+    const MODEL_DIR = "./model/";
 
     // Stability controls
     const THRESHOLD = 0.82;   // raise if false triggers
@@ -201,25 +167,27 @@
       if (s.includes("jump")) return "Jump";
       if (s.includes("sleep")) return "Sleep";
       if (s.includes("stand")) return "Stand";
+      // If your Teachable Machine labels are exactly Sit/Jump/Sleep, this won't be used.
       return null;
     }
 
     function setPet(action, source = "Voice") {
       elPetImg.className = "";
       if (action === "Sit") {
-        elPetImg.src = "pet-sit.png?v=" + encodeURIComponent(V);
+        elPetImg.src = "pet-sit.png";
         elPetText.textContent = `Sitting (from ${source})`;
       } else if (action === "Jump") {
-        elPetImg.src = "pet-jump.png?v=" + encodeURIComponent(V);
-        void elPetImg.offsetWidth; // retrigger anim
+        elPetImg.src = "pet-jump.png";
+        // re-trigger animation reliably
+        void elPetImg.offsetWidth;
         elPetImg.classList.add("jumpAnim");
         elPetText.textContent = `Jumping (from ${source})`;
       } else if (action === "Sleep") {
-        elPetImg.src = "pet-sleep.png?v=" + encodeURIComponent(V);
+        elPetImg.src = "pet-sleep.png";
         elPetImg.classList.add("sleepDim");
         elPetText.textContent = `Sleeping (from ${source})`;
       } else {
-        elPetImg.src = "pet-stand.png?v=" + encodeURIComponent(V);
+        elPetImg.src = "pet-stand.png";
         elPetText.textContent = `Standing (from ${source})`;
       }
     }
@@ -241,9 +209,7 @@
         streak = 0;
         return;
       }
-      if (action === lastLabel) streak++;
-      else { lastLabel = action; streak = 1; }
-
+      if (action === lastLabel) streak++; else { lastLabel = action; streak = 1; }
       if (streak >= STREAK_N) {
         setPet(action, "Voice");
         streak = 0;
@@ -251,89 +217,65 @@
       }
     }
 
-    async function headOrGet(url) {
-      // Some hosts behave oddly with HEAD; fallback to GET
-      try {
-        const r = await fetch(url, { method: "HEAD", cache: "no-store" });
-        if (r.ok) return r;
-      } catch {}
-      return fetch(url, { method: "GET", cache: "no-store" });
-    }
-
     async function verifyModelFiles() {
-      if (location.protocol === "file:") {
+      // If you opened index.html directly (file://), fetching files may be blocked.
+      if (location.protocol === 'file:') {
         throw new Error(
           "You opened this via file://\n\n" +
-          "Browsers block loading model files from file://.\n" +
-          "Use GitHub Pages or run a local web server."
+          "Browsers often block loading model files from file://\n" +
+          "Run a local web server or host it (GitHub Pages / Netlify)."
         );
       }
 
-      const targets = [
-        { name: "model.json",    url: MODEL_JSON_URL },
-        { name: "metadata.json", url: META_JSON_URL },
-        { name: "weights.bin",   url: WEIGHTS_URL }
-      ];
-
-      const results = [];
-      for (const t of targets) {
-        const r = await headOrGet(t.url);
-        const len = r.headers.get("content-length");
-        results.push(`${t.name}: HTTP ${r.status}${len ? ` (len ${len})` : ""}`);
-        if (!r.ok) throw new Error(`Cannot fetch ${t.name} (HTTP ${r.status}).\nURL: ${t.url}`);
+      const required = ["model.json", "metadata.json", "weights.bin"]; 
+      for (const f of required) {
+        const r = await fetch(MODEL_DIR + f, { cache: 'no-store' });
+        if (!r.ok) throw new Error(`Missing or not served: ${MODEL_DIR}${f} (HTTP ${r.status})`);
       }
-      return results;
     }
 
     async function loadModel() {
-      showStatus(
-        "Loading libraries…\n\n" +
-        "If this hangs, a blocker is stopping the Teachable Machine script."
+      // Ensure JS deps first (this is the part that was failing for you).
+      showStatus("Loading libraries…");
+      await ensureDeps();
+
+      showStatus("Checking model files…");
+      await verifyModelFiles();
+
+      showStatus("Loading model…");
+      // Teachable Machine v2 audio exports are Speech Commands compatible.
+      recognizer = speechCommands.create(
+        'BROWSER_FFT',
+        undefined,
+        MODEL_DIR + 'model.json',
+        MODEL_DIR + 'metadata.json'
       );
-
-      await ensureLibrariesLoaded();
-
-      showStatus(
-        "Checking model files…\n\n" +
-        `MODEL_DIR = ${MODEL_DIR}\n` +
-        `model.json = ${MODEL_JSON_URL}\n` +
-        `metadata  = ${META_JSON_URL}\n` +
-        `weights   = ${WEIGHTS_URL}\n` +
-        `cache v   = ${V}\n`
-      );
-
-      const checks = await verifyModelFiles();
-      console.log("Model file checks:", checks);
-
-      showStatus(
-        "Model files OK:\n" + checks.join("\n") + "\n\nLoading model…"
-      );
-
-      // tmAudio is guaranteed to exist here
-      model = await window.tmAudio.load(MODEL_JSON_URL, META_JSON_URL);
-
-      showStatus(
-        "Model loaded.\n\n" +
-        "Click Start Listening.\n" +
-        "Tip: If mic prompt doesn’t show, check browser permissions for this site."
-      );
+      await recognizer.ensureModelLoaded();
+      labels = recognizer.wordLabels();
+      showStatus("Model loaded. Click Start Listening.");
     }
 
     async function startListening() {
       try {
-        if (!model) await loadModel();
+        if (!recognizer) await loadModel();
         if (isListening) return;
 
-        recognizer = model.createRecognizer();
-
-        await recognizer.listen(async () => {
-          const predictions = await model.predict(recognizer.getFrequencyData());
+        // Start microphone classification.
+        recognizer.listen(({ scores }) => {
+          // Convert to the same shape used by renderScores.
+          const predictions = labels.map((name, i) => ({ className: name, probability: scores[i] }));
           renderScores(predictions);
-          const top = predictions.reduce((best, p) => p.probability > best.probability ? p : best, predictions[0]);
-          considerTrigger(top.className, top.probability);
+
+          // Pick top class (excluding background noise).
+          let top = null;
+          for (const p of predictions) {
+            if (normalizeAction(p.className) === null) continue;
+            if (!top || p.probability > top.probability) top = p;
+          }
+          if (top) considerTrigger(top.className, top.probability);
         }, {
-          includeSpectrogram: true,
-          probabilityThreshold: 0,
+          // 0.75 keeps it responsive but avoids constant false triggers.
+          probabilityThreshold: 0.0,
           overlapFactor: 0.5
         });
 
@@ -345,10 +287,10 @@
         showStatus(
           "Model not found / cannot load.\n\n" +
           (e?.message || String(e)) +
-          "\n\nWhat to do:\n" +
-          "1) DevTools → Network: confirm model.json/metadata.json/weights.bin are 200\n" +
-          "2) Disable adblock for this site (common cause of tmAudio not loading)\n" +
-          "3) Hard refresh (Ctrl+Shift+R) or change URL to ?v=101\n"
+          "\n\nFix:\n" +
+          "1) Ensure model files are in ./model/\n" +
+          "2) Host using a web server (not file://)\n" +
+          "3) Refresh and try again."
         );
         console.error(e);
       }
@@ -372,10 +314,8 @@
 
     // Initial state
     setPet("Stand", "Buttons");
-
-    // Quiet preload (won’t throw tmAudio ReferenceError anymore)
-    loadModel().catch(err => {
-      console.warn(err);
+    loadModel().catch(() => {
+      // Defer showing error until user clicks Start (less scary).
       showStatus("Model not loaded yet. Click Start Listening.");
     });
   </script>
