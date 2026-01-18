@@ -78,7 +78,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/audio@0.8/dist/teachablemachine-audio.min.js"></script>
 
   <script>
-    const MODEL_DIR = "./model/";
+    const MODEL_DIR = new URL("model/", window.location.href).toString();
 
     // Stability controls
     const THRESHOLD = 0.82;   // raise if false triggers
