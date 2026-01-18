@@ -2,352 +2,391 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>AI Pet That Learns My Voice</title>
   <style>
     :root { --border:#ddd; --muted:#555; }
-    body { font-family: Arial, sans-serif; max-width: 1100px; margin: 18px auto; padding: 0 12px; }
-    h1 { margin: 0 0 10px 0; font-size: 44px; }
-    .muted { color: var(--muted); }
-    .row { display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start; }
-    .card { border:1px solid var(--border); border-radius:14px; padding:14px; flex:1; min-width:320px; }
-    .btn { padding:10px 14px; border-radius:10px; border:1px solid #999; background:#f6f6f6; cursor:pointer; }
-    .btn:disabled { opacity:.5; cursor:not-allowed; }
-    .pill { display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid var(--border); margin:4px 6px 0 0; font-size:14px; }
-    #status { white-space:pre-wrap; }
-
-    .petStage { height: 300px; display:flex; align-items:flex-end; justify-content:center; border:1px solid var(--border); border-radius:12px; padding:10px; background:#fff; }
-    #petImg { width: 320px; height:auto; }
-
-    .jumpAnim { animation: jumpBounce 650ms ease-in-out 1; }
-    @keyframes jumpBounce {
-      0%   { transform: translateY(0); }
-      40%  { transform: translateY(-90px); }
-      70%  { transform: translateY(0); }
-      100% { transform: translateY(0); }
-    }
-
-    .sleepDim { opacity: 0.82; filter: brightness(0.95); }
+    body { font-family: Arial, sans-serif; max-width: 1100px; margin: 0 auto; padding: 12px; }
+    h1 { font-size: 56px; margin: 8px 0 6px; }
+    .muted { color: var(--muted); margin: 0 0 18px; font-size: 18px; }
+    .row { display:flex; gap:18px; align-items:flex-start; }
+    .col { flex:1; min-width: 340px; }
+    .card { border: 1px solid var(--border); border-radius: 16px; padding: 18px; background: #fff; }
+    .card h2 { margin: 0 0 12px; font-size: 28px; }
+    .btn { border:1px solid #bbb; background:#fff; padding:10px 16px; border-radius: 12px; cursor:pointer; font-size: 15px; }
+    .btn:disabled { opacity:.45; cursor:not-allowed; }
+    .btn.primary { border-color:#111; }
+    .btnRow { display:flex; flex-wrap:wrap; gap:10px; }
+    .sectionTitle { font-size: 24px; font-weight:700; margin: 18px 0 10px; }
+    .status { margin-top: 10px; color:#333; }
+    .hr { height:1px; background: var(--border); margin: 14px 0; }
+    .pill { display:inline-block; border:1px solid #ddd; border-radius:999px; padding:6px 10px; margin: 6px 6px 0 0; font-size: 14px; }
+    .petBox { border:1px solid var(--border); border-radius: 16px; padding: 18px; min-height: 380px; display:flex; align-items:center; justify-content:center; }
+    #petImg { max-width: 420px; width: 100%; height: auto; }
+    .small { font-size: 13px; color: var(--muted); }
+    .cfg { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-top:10px; }
+    .cfg label { font-size: 13px; color: var(--muted); display:flex; gap:8px; align-items:center; }
+    input[type="range"] { width: 160px; }
+    code { background:#f6f6f6; padding:2px 6px; border-radius:6px; }
   </style>
+
+  <!-- TensorFlow.js + Speech Commands (NO teachablemachine-audio dependency) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/speech-commands@0.4.0/dist/speech-commands.min.js"></script>
 </head>
+
 <body>
   <h1>AI Pet That Learns My Voice</h1>
   <p class="muted">Commands: <b>Sit</b>, <b>Jump</b>, <b>Sleep</b>. Use the headset microphone. Buttons are the backup.</p>
 
   <div class="row">
-    <div class="card">
-      <h2>Controls</h2>
-      <p>
-        <button id="btnStart" class="btn">Start Listening</button>
-        <button id="btnStop" class="btn" disabled>Stop</button>
-      </p>
+    <div class="col">
+      <div class="card">
+        <h2>Controls</h2>
 
-      <p class="muted">If it’s noisy, use buttons:</p>
-      <p>
-        <button class="btn btnAction" data-action="Sit">Sit</button>
-        <button class="btn btnAction" data-action="Jump">Jump</button>
-        <button class="btn btnAction" data-action="Sleep">Sleep</button>
-        <button class="btn btnAction" data-action="Stand">Stand</button>
-      </p>
+        <div class="btnRow">
+          <button id="startBtn" class="btn primary">Start Listening</button>
+          <button id="stopBtn" class="btn" disabled>Stop</button>
+        </div>
 
-      <h3>Live Prediction</h3>
-      <div id="top" style="font-size:18px;"></div>
-      <div id="scores"></div>
+        <div class="cfg">
+          <label>
+            Sensitivity
+            <input id="threshold" type="range" min="0.20" max="0.95" step="0.05" value="0.50" />
+            <span id="thresholdVal" class="small">0.50</span>
+          </label>
+          <label>
+            Hold frames
+            <input id="frames" type="range" min="1" max="6" step="1" value="2" />
+            <span id="framesVal" class="small">2</span>
+          </label>
+        </div>
 
-      <h3>Status</h3>
-      <div id="status" class="muted">Loading…</div>
+        <div class="sectionTitle">If it’s noisy, use buttons:</div>
+        <div class="btnRow">
+          <button class="btn" data-action="sit">Sit</button>
+          <button class="btn" data-action="jump">Jump</button>
+          <button class="btn" data-action="sleep">Sleep</button>
+          <button class="btn" data-action="stand">Stand</button>
+        </div>
 
-      <hr />
-      <div class="muted">
-        <b>Setup:</b> Put your Teachable Machine exported files in <code>./model/</code>:
-        <code>model.json</code>, <code>metadata.json</code>, <code>weights.bin</code>.
+        <div class="sectionTitle">Live Prediction</div>
+        <div id="liveTop" class="status">Top: (not listening)</div>
+        <div id="livePills"></div>
+
+        <div class="sectionTitle">Status</div>
+        <div id="status" class="status">Model not loaded yet. Click Start Listening.</div>
+
+        <div class="hr"></div>
+        <div class="small">
+          Setup: Put your Teachable Machine exported files either in
+          <code>./model/</code> (recommended) OR the site root:
+          <code>model.json</code>, <code>metadata.json</code>, <code>weights.bin</code>.
+        </div>
       </div>
     </div>
 
-    <div class="card">
-      <h2>Pet</h2>
-      <div class="petStage">
-        <img id="petImg" src="pet-stand.png" alt="AI Pet" />
+    <div class="col">
+      <div class="card">
+        <h2>Pet</h2>
+        <div class="petBox">
+          <img id="petImg" alt="pet" src="pet-stand.png" />
+        </div>
+        <div class="sectionTitle" id="petCaption">Standing (from Buttons)</div>
+        <div class="small">Tip: keep the mic close to the child’s mouth.</div>
       </div>
-      <div id="petText" style="font-size:18px; margin-top:8px;">Waiting…</div>
-      <p class="muted">Tip: keep the mic close to the child’s mouth.</p>
     </div>
   </div>
 
-  <!--
-    Dependency loading notes:
-    - Your screenshots show "tmAudio is not defined" AND the Network tab shows
-      teachablemachine-audio.min.js failing to load.
-    - That happens when the Teachable Machine Audio library script is blocked
-      (common on school networks) or the CDN has a transient failure.
-    - Fix: load dependencies with a fallback list (jsDelivr + unpkg).
-  -->
-  <script>
-    // Load a script with fallback URLs. Resolves with the URL that worked.
-    // Adds a timeout so we don't hang forever on a blocked CDN.
-    function loadScriptWithFallback(urls, globalName, timeoutMs = 12000) {
-      return new Promise((resolve, reject) => {
-        // If the global is already present, skip loading.
-        if (globalName && window[globalName]) {
-          resolve('already-loaded');
-          return;
-        }
+<script>
+(() => {
+  // ---------- DOM ----------
+  const startBtn = document.getElementById('startBtn');
+  const stopBtn  = document.getElementById('stopBtn');
+  const statusEl = document.getElementById('status');
+  const petImg   = document.getElementById('petImg');
+  const petCaption = document.getElementById('petCaption');
+  const liveTop = document.getElementById('liveTop');
+  const livePills = document.getElementById('livePills');
 
-        let i = 0;
-        const tryNext = () => {
-          if (i >= urls.length) {
-            reject(new Error(`Failed loading ${globalName || 'script'} from all CDNs.`));
-            return;
-          }
+  const thresholdEl = document.getElementById('threshold');
+  const framesEl = document.getElementById('frames');
+  const thresholdVal = document.getElementById('thresholdVal');
+  const framesVal = document.getElementById('framesVal');
 
-          const url = urls[i++];
-          const s = document.createElement('script');
-          s.src = url;
-          s.async = true;
-          s.crossOrigin = 'anonymous';
+  thresholdEl.addEventListener('input', () => thresholdVal.textContent = Number(thresholdEl.value).toFixed(2));
+  framesEl.addEventListener('input', () => framesVal.textContent = framesEl.value);
 
-          let done = false;
-          const finishOk = () => {
-            if (done) return;
-            done = true;
-            resolve(url);
-          };
-          const finishFail = () => {
-            if (done) return;
-            done = true;
-            s.remove();
-            tryNext();
-          };
+  // ---------- Images ----------
+  const IMAGES = {
+    stand: 'pet-stand.png',
+    sit:   'pet-sit.png',
+    jump:  'pet-jump.png',
+    sleep: 'pet-sleep.png'
+  };
 
-          const t = setTimeout(finishFail, timeoutMs);
-          s.onload = () => {
-            clearTimeout(t);
-            finishOk();
-          };
-          s.onerror = () => {
-            clearTimeout(t);
-            finishFail();
-          };
+  function setPet(action, source) {
+    if (!IMAGES[action]) action = 'stand';
+    petImg.src = IMAGES[action];
+    const label = action.charAt(0).toUpperCase() + action.slice(1);
+    petCaption.textContent = `${label} (from ${source})`;
+  }
 
-          document.head.appendChild(s);
-        };
+  // Buttons backup
+  document.querySelectorAll('button[data-action]').forEach(btn => {
+    btn.addEventListener('click', () => setPet(btn.dataset.action, 'Buttons'));
+  });
 
-        tryNext();
+  // ---------- Speech model ----------
+  let recognizer = null;
+  let isListening = false;
+
+  // Smoothing / gating so it actually triggers for real-world noisy kids
+  let lastActionTime = 0;
+  const COOLDOWN_MS = 650; // shorter = more responsive
+
+  // stability counters
+  const stableCounts = { sit:0, jump:0, sleep:0, stand:0 };
+  let lastCandidate = null;
+
+  // Normalize labels coming from TeachableMachine / speech-commands
+  function normLabel(s) {
+    return String(s || '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, ' ');
+  }
+
+  function isBackgroundLabel(lbl) {
+    const t = normLabel(lbl);
+    return (
+      t.includes('background') ||
+      t === '_background_noise_' ||
+      t === 'background noise' ||
+      t === 'background'
+    );
+  }
+
+  function toAction(lbl) {
+    const t = normLabel(lbl);
+    if (t.includes('sit')) return 'sit';
+    if (t.includes('jump')) return 'jump';
+    if (t.includes('sleep')) return 'sleep';
+    return null;
+  }
+
+  // Build a URL safely relative to current page (works with GitHub Pages + querystrings)
+  function u(path) {
+    return new URL(path, window.location.href).toString();
+  }
+
+  // Try multiple model locations so you don’t get stuck on path mistakes
+  async function createRecognizerWithFallback() {
+    // You can override with ?modelPath=model/  OR ?modelPath=.
+    const qs = new URLSearchParams(location.search);
+    const modelPathOverride = qs.get('modelPath'); // e.g. "model/" or "./model/" or "."
+    const candidates = [];
+
+    if (modelPathOverride) {
+      const base = modelPathOverride.endsWith('/') ? modelPathOverride : (modelPathOverride + '/');
+      candidates.push({
+        name: `override:${base}`,
+        model: u(base + 'model.json'),
+        meta:  u(base + 'metadata.json')
       });
     }
 
-    // Ensure TFJS + TeachableMachine Audio are available.
-    async function ensureDeps() {
-      // Your screenshots show the TeachableMachine Audio helper script being blocked
-      // ("tmAudio is not defined" + Network failures). To avoid that dependency,
-      // we use the TensorFlow SpeechCommands API directly.
-      await loadScriptWithFallback(
-        [
-          'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js',
-          'https://unpkg.com/@tensorflow/tfjs@4.20.0/dist/tf.min.js',
-          'https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.20.0/tf.min.js'
-        ],
-        'tf'
-      );
+    // Preferred (your repo shows /model/ folder)
+    candidates.push({ name:'./model/', model: u('./model/model.json'), meta: u('./model/metadata.json') });
 
-      await loadScriptWithFallback(
-        [
-          // Match Teachable Machine TMv2 exports (metadata shows tfjsSpeechCommandsVersion 0.4.0)
-          'https://cdn.jsdelivr.net/npm/@tensorflow-models/speech-commands@0.4.0/dist/speech-commands.min.js',
-          'https://unpkg.com/@tensorflow-models/speech-commands@0.4.0/dist/speech-commands.min.js'
-        ],
-        'speechCommands'
-      );
-    }
-  </script>
+    // Also allow root (some of your screenshots showed root fetches)
+    candidates.push({ name:'./', model: u('./model.json'), meta: u('./metadata.json') });
 
-  <script>
-    // Use absolute URLs. Some SpeechCommands builds call `new URL(x)` internally,
-    // which fails if `x` has no scheme (e.g., "./model/metadata.json").
-    // Absolute URLs avoid the "Unsupported URL scheme" error.
-    const MODEL_DIR = new URL('./model/', window.location.href).toString();
-
-    // Stability controls
-    const THRESHOLD = 0.82;   // raise if false triggers
-    const STREAK_N  = 2;      // require N consecutive hits
-
-    let model, recognizer;
-    let isListening = false;
-    let labels = [];
-    let lastLabel = null;
-    let streak = 0;
-
-    const elTop = document.getElementById("top");
-    const elScores = document.getElementById("scores");
-    const elStatus = document.getElementById("status");
-    const elPetText = document.getElementById("petText");
-    const elPetImg = document.getElementById("petImg");
-    const btnStart = document.getElementById("btnStart");
-    const btnStop = document.getElementById("btnStop");
-
-    function showStatus(msg) {
-      elStatus.textContent = msg;
-    }
-
-    function normalizeAction(label) {
-      const s = String(label || "").toLowerCase();
-      if (s.includes("sit")) return "Sit";
-      if (s.includes("jump")) return "Jump";
-      if (s.includes("sleep")) return "Sleep";
-      if (s.includes("stand")) return "Stand";
-      // If your Teachable Machine labels are exactly Sit/Jump/Sleep, this won't be used.
-      return null;
-    }
-
-    function setPet(action, source = "Voice") {
-      elPetImg.className = "";
-      if (action === "Sit") {
-        elPetImg.src = "pet-sit.png";
-        elPetText.textContent = `Sitting (from ${source})`;
-      } else if (action === "Jump") {
-        elPetImg.src = "pet-jump.png";
-        // re-trigger animation reliably
-        void elPetImg.offsetWidth;
-        elPetImg.classList.add("jumpAnim");
-        elPetText.textContent = `Jumping (from ${source})`;
-      } else if (action === "Sleep") {
-        elPetImg.src = "pet-sleep.png";
-        elPetImg.classList.add("sleepDim");
-        elPetText.textContent = `Sleeping (from ${source})`;
-      } else {
-        elPetImg.src = "pet-stand.png";
-        elPetText.textContent = `Standing (from ${source})`;
-      }
-    }
-
-    function renderScores(predictions) {
-      const sorted = [...predictions].sort((a,b) => b.probability - a.probability);
-      const top = sorted[0];
-      elTop.textContent = `Top: ${top.className} (${Math.round(top.probability*100)}%)`;
-      elScores.innerHTML = sorted.map(p => {
-        const pct = Math.round(p.probability * 100);
-        return `<span class="pill">${p.className}: ${pct}%</span>`;
-      }).join("");
-    }
-
-    function considerTrigger(label, prob) {
-      const action = normalizeAction(label);
-      if (!action || prob < THRESHOLD) {
-        lastLabel = null;
-        streak = 0;
-        return;
-      }
-      if (action === lastLabel) streak++; else { lastLabel = action; streak = 1; }
-      if (streak >= STREAK_N) {
-        setPet(action, "Voice");
-        streak = 0;
-        lastLabel = null;
-      }
-    }
-
-    async function verifyModelFiles() {
-      // If you opened index.html directly (file://), fetching files may be blocked.
-      if (location.protocol === 'file:') {
-        throw new Error(
-          "You opened this via file://\n\n" +
-          "Browsers often block loading model files from file://\n" +
-          "Run a local web server or host it (GitHub Pages / Netlify)."
-        );
-      }
-
-      const required = ["model.json", "metadata.json", "weights.bin"]; 
-      for (const f of required) {
-        const r = await fetch(MODEL_DIR + f, { cache: 'no-store' });
-        if (!r.ok) throw new Error(`Missing or not served: ${MODEL_DIR}${f} (HTTP ${r.status})`);
-      }
-    }
-
-    async function loadModel() {
-      // Ensure JS deps first (this is the part that was failing for you).
-      showStatus("Loading libraries…");
-      const depInfo = await ensureDeps();
-      // Make sure TF is fully ready before creating the recognizer.
-      if (window.tf && typeof window.tf.ready === 'function') {
-        await window.tf.ready();
-      }
-      console.log('Dependency load results:', depInfo);
-
-      showStatus("Checking model files…");
-      await verifyModelFiles();
-
-      showStatus("Loading model…");
-      // Teachable Machine v2 audio exports are Speech Commands compatible.
-      recognizer = speechCommands.create(
-        'BROWSER_FFT',
-        null,
-        MODEL_DIR + 'model.json',
-        MODEL_DIR + 'metadata.json'
-      );
-      await recognizer.ensureModelLoaded();
-      labels = recognizer.wordLabels();
-      showStatus("Model loaded. Click Start Listening.");
-    }
-
-    async function startListening() {
+    let lastErr = null;
+    for (const c of candidates) {
       try {
-        if (!recognizer) await loadModel();
-        if (isListening) return;
+        // Quick fetch check first (clearer errors than the library)
+        const [m, md] = await Promise.all([fetch(c.model), fetch(c.meta)]);
+        if (!m.ok) throw new Error(`Model HTTP ${m.status} at ${c.model}`);
+        if (!md.ok) throw new Error(`Metadata HTTP ${md.status} at ${c.meta}`);
 
-        // Start microphone classification.
-        recognizer.listen(({ scores }) => {
-          // Convert to the same shape used by renderScores.
-          const predictions = labels.map((name, i) => ({ className: name, probability: scores[i] }));
-          renderScores(predictions);
-
-          // Pick top class (excluding background noise).
-          let top = null;
-          for (const p of predictions) {
-            if (normalizeAction(p.className) === null) continue;
-            if (!top || p.probability > top.probability) top = p;
-          }
-          if (top) considerTrigger(top.className, top.probability);
-        }, {
-          // Higher threshold reduces false triggers.
-          probabilityThreshold: 0.75,
-          overlapFactor: 0.5
-        });
-
-        isListening = true;
-        btnStart.disabled = true;
-        btnStop.disabled = false;
-        showStatus("Listening… Speak: Sit / Jump / Sleep");
+        // speechCommands.create expects model + metadata URLs
+        const r = window.speechCommands.create('BROWSER_FFT', undefined, c.model, c.meta);
+        await r.ensureModelLoaded();
+        statusEl.textContent = `Model loaded from ${c.name}. Click Start Listening.`;
+        return r;
       } catch (e) {
-        showStatus(
-          "Model not found / cannot load.\n\n" +
-          (e?.message || String(e)) +
-          "\n\nFix:\n" +
-          "1) Ensure model files are in ./model/\n" +
-          "2) Host using a web server (not file://)\n" +
-          "3) Refresh and try again."
-        );
-        console.error(e);
+        lastErr = e;
+      }
+    }
+    throw lastErr || new Error('Unable to load model from any known location.');
+  }
+
+  async function loadModelIfNeeded() {
+    if (recognizer) return;
+    if (!window.tf || !window.speechCommands) {
+      throw new Error('Dependencies not loaded (tfjs / speech-commands). Check CDN access.');
+    }
+    recognizer = await createRecognizerWithFallback();
+
+    // Show labels for sanity
+    const labels = recognizer.wordLabels();
+    // If labels are missing, you trained/exported wrong artifact
+    if (!labels || !labels.length) throw new Error('Model loaded but has no labels.');
+  }
+
+  function renderLive(labels, scores) {
+    // top
+    let topIdx = 0;
+    for (let i = 1; i < scores.length; i++) if (scores[i] > scores[topIdx]) topIdx = i;
+    liveTop.textContent = `Top: ${labels[topIdx]} (${Math.round(scores[topIdx] * 100)}%)`;
+
+    // pills
+    livePills.innerHTML = '';
+    // show first up to 6 labels
+    const pairs = labels.map((l, i) => ({ l, p: scores[i] }))
+      .sort((a,b) => b.p - a.p)
+      .slice(0, 6);
+
+    for (const p of pairs) {
+      const d = document.createElement('div');
+      d.className = 'pill';
+      d.textContent = `${p.l}: ${Math.round(p.p * 100)}%`;
+      livePills.appendChild(d);
+    }
+  }
+
+  function updateStability(candidateAction) {
+    Object.keys(stableCounts).forEach(k => stableCounts[k] = 0);
+
+    if (!candidateAction) {
+      lastCandidate = null;
+      return { stableAction: null, frames: 0 };
+    }
+
+    if (candidateAction === lastCandidate) {
+      stableCounts[candidateAction] = (stableCounts[candidateAction] || 0) + 1;
+    } else {
+      lastCandidate = candidateAction;
+      stableCounts[candidateAction] = 1;
+    }
+
+    return { stableAction: candidateAction, frames: stableCounts[candidateAction] };
+  }
+
+  function maybeTrigger(labels, scores) {
+    const threshold = Number(thresholdEl.value);
+    const needFrames = Number(framesEl.value);
+
+    // pick best non-background label
+    let bestIdx = -1;
+    let bestScore = -1;
+    for (let i = 0; i < labels.length; i++) {
+      if (isBackgroundLabel(labels[i])) continue;
+      if (scores[i] > bestScore) {
+        bestScore = scores[i];
+        bestIdx = i;
       }
     }
 
-    async function stopListening() {
-      if (!recognizer || !isListening) return;
-      recognizer.stopListening();
-      isListening = false;
-      btnStart.disabled = false;
-      btnStop.disabled = true;
-      showStatus("Stopped. Click Start Listening.");
+    if (bestIdx === -1) return;
+
+    const lbl = labels[bestIdx];
+    const action = toAction(lbl);
+
+    // Gate by probability + stability + cooldown
+    const now = Date.now();
+    if (!action) {
+      lastCandidate = null;
+      return;
     }
 
-    btnStart.addEventListener("click", startListening);
-    btnStop.addEventListener("click", stopListening);
+    // If probability is low, do not accumulate stability
+    if (bestScore < threshold) {
+      lastCandidate = null;
+      return;
+    }
 
-    document.querySelectorAll(".btnAction").forEach(btn => {
-      btn.addEventListener("click", () => setPet(btn.dataset.action, "Buttons"));
-    });
+    // Stability frames
+    const s = updateStability(action);
+    if (s.frames < needFrames) return;
 
-    // Initial state
-    setPet("Stand", "Buttons");
-    showStatus("Model not loaded yet. Click Start Listening.");
-  </script>
+    if (now - lastActionTime < COOLDOWN_MS) return;
+    lastActionTime = now;
+
+    setPet(action, 'Voice');
+    statusEl.textContent = `Heard: ${action.toUpperCase()} (score ${bestScore.toFixed(2)})`;
+  }
+
+  async function startListening() {
+    try {
+      startBtn.disabled = true;
+      statusEl.textContent = 'Loading model...';
+      await loadModelIfNeeded();
+
+      statusEl.textContent = 'Requesting microphone permission...';
+      // Start
+      await recognizer.listen(result => {
+        const labels = recognizer.wordLabels();
+        const scores = result.scores;
+
+        renderLive(labels, scores);
+        maybeTrigger(labels, scores);
+
+      }, {
+        overlapFactor: 0.60,       // faster updates
+        probabilityThreshold: 0.0, // we do our own thresholding
+        includeSpectrogram: false,
+        invokeCallbackOnNoiseAndUnknown: true
+      });
+
+      isListening = true;
+      stopBtn.disabled = false;
+      startBtn.disabled = true;
+      statusEl.textContent = 'Listening... Speak: Sit / Jump / Sleep';
+    } catch (e) {
+      isListening = false;
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      const msg = (e && e.message) ? e.message : String(e);
+
+      // Clearer error text for the exact failures you had before:
+      // - blocked CDN
+      // - wrong model path
+      statusEl.textContent =
+        `Model not loaded / cannot listen.\n` +
+        `${msg}\n\n` +
+        `Fix checklist:\n` +
+        `1) Ensure model files exist in ./model/ OR root (model.json, metadata.json, weights.bin)\n` +
+        `2) Ensure GitHub Pages is enabled and you are NOT using file://\n` +
+        `3) Try hard refresh (Ctrl+F5)\n` +
+        `4) If a school network blocks CDNs, use a different network or self-host tf.min.js + speech-commands.min.js`;
+    }
+  }
+
+  async function stopListening() {
+    try {
+      if (recognizer && isListening) {
+        recognizer.stopListening();
+      }
+    } finally {
+      isListening = false;
+      stopBtn.disabled = true;
+      startBtn.disabled = false;
+      statusEl.textContent = 'Stopped. Click Start Listening.';
+      liveTop.textContent = 'Top: (not listening)';
+      livePills.innerHTML = '';
+      lastCandidate = null;
+      lastActionTime = 0;
+    }
+  }
+
+  startBtn.addEventListener('click', startListening);
+  stopBtn.addEventListener('click', stopListening);
+
+  // Default pet pose
+  setPet('stand', 'Buttons');
+})();
+</script>
 </body>
 </html>
