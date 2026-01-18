@@ -74,17 +74,105 @@
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/audio@0.8/dist/teachablemachine-audio.min.js"></script>
-
   <script>
-    // Cache-buster: use ?v=99 like you're doing, otherwise timestamp
+    // ==========================
+    // Robust dependency loader
+    // ==========================
+    function loadScriptWithFallback(urls, { timeoutMs = 12000 } = {}) {
+      return new Promise((resolve, reject) => {
+        let idx = 0;
+
+        const tryNext = (lastErr) => {
+          if (idx >= urls.length) {
+            reject(lastErr || new Error("All script URLs failed"));
+            return;
+          }
+
+          const url = urls[idx++];
+          const s = document.createElement("script");
+          s.src = url;
+          s.async = true;
+
+          let done = false;
+          const timer = setTimeout(() => {
+            if (done) return;
+            done = true;
+            s.remove();
+            tryNext(new Error(`Timeout loading: ${url}`));
+          }, timeoutMs);
+
+          s.onload = () => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            resolve(url);
+          };
+
+          s.onerror = () => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            s.remove();
+            tryNext(new Error(`Failed loading: ${url}`));
+          };
+
+          document.head.appendChild(s);
+        };
+
+        tryNext();
+      });
+    }
+
+    async function ensureLibrariesLoaded() {
+      // If already loaded, skip.
+      if (window.tf && window.tmAudio) return;
+
+      // TensorFlow.js
+      if (!window.tf) {
+        await loadScriptWithFallback([
+          "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js",
+          "https://unpkg.com/@tensorflow/tfjs@4.20.0/dist/tf.min.js",
+          // last resort older stable:
+          "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.16.0/dist/tf.min.js"
+        ]);
+      }
+
+      // Teachable Machine Audio (THIS is what your Network panel shows failing)
+      if (!window.tmAudio) {
+        await loadScriptWithFallback([
+          // Pin to a specific version (more reliable than floating tags)
+          "https://cdn.jsdelivr.net/npm/@teachablemachine/audio@0.8.4/dist/teachablemachine-audio.min.js",
+          "https://unpkg.com/@teachablemachine/audio@0.8.4/dist/teachablemachine-audio.min.js",
+          // fallback to 0.8 if 0.8.4 is blocked/missing
+          "https://cdn.jsdelivr.net/npm/@teachablemachine/audio@0.8/dist/teachablemachine-audio.min.js",
+          "https://unpkg.com/@teachablemachine/audio@0.8/dist/teachablemachine-audio.min.js"
+        ]);
+      }
+
+      // Final sanity check
+      if (!window.tmAudio) {
+        throw new Error(
+          "Teachable Machine Audio library failed to load.\n\n" +
+          "Most common cause: adblock / school network filter blocking CDN.\n\n" +
+          "Fix:\n" +
+          "1) Disable adblock for this site OR allow cdn.jsdelivr.net and unpkg.com\n" +
+          "2) Try a different network\n" +
+          "3) Hard refresh (Ctrl+Shift+R)"
+        );
+      }
+    }
+
+    // ==========================
+    // App logic (your existing logic, made safe)
+    // ==========================
+    // Cache-buster: use ?v=100 like you're doing, otherwise timestamp
     const V = new URLSearchParams(location.search).get("v") || String(Date.now());
 
     // Always resolve against current page URL; works on GitHub Pages (/ai-pet/)
     const MODEL_DIR = new URL("model/", window.location.href).toString();
     const MODEL_JSON_URL = `${MODEL_DIR}model.json?v=${encodeURIComponent(V)}`;
     const META_JSON_URL  = `${MODEL_DIR}metadata.json?v=${encodeURIComponent(V)}`;
+    const WEIGHTS_URL    = `${MODEL_DIR}weights.bin?v=${encodeURIComponent(V)}`;
 
     // Stability controls
     const THRESHOLD = 0.82;   // raise if false triggers
@@ -164,7 +252,7 @@
     }
 
     async function headOrGet(url) {
-      // Some static hosts can behave oddly with HEAD; fallback to GET
+      // Some hosts behave oddly with HEAD; fallback to GET
       try {
         const r = await fetch(url, { method: "HEAD", cache: "no-store" });
         if (r.ok) return r;
@@ -184,15 +272,14 @@
       const targets = [
         { name: "model.json",    url: MODEL_JSON_URL },
         { name: "metadata.json", url: META_JSON_URL },
-        // weights.bin is referenced inside model.json; still check it directly:
-        { name: "weights.bin",   url: `${MODEL_DIR}weights.bin?v=${encodeURIComponent(V)}` }
+        { name: "weights.bin",   url: WEIGHTS_URL }
       ];
 
       const results = [];
       for (const t of targets) {
         const r = await headOrGet(t.url);
         const len = r.headers.get("content-length");
-        results.push(`${t.name}: HTTP ${r.status}${len ? ` (len ${len})` : ""} :: ${t.url}`);
+        results.push(`${t.name}: HTTP ${r.status}${len ? ` (len ${len})` : ""}`);
         if (!r.ok) throw new Error(`Cannot fetch ${t.name} (HTTP ${r.status}).\nURL: ${t.url}`);
       }
       return results;
@@ -200,10 +287,18 @@
 
     async function loadModel() {
       showStatus(
+        "Loading libraries…\n\n" +
+        "If this hangs, a blocker is stopping the Teachable Machine script."
+      );
+
+      await ensureLibrariesLoaded();
+
+      showStatus(
         "Checking model files…\n\n" +
         `MODEL_DIR = ${MODEL_DIR}\n` +
         `model.json = ${MODEL_JSON_URL}\n` +
         `metadata  = ${META_JSON_URL}\n` +
+        `weights   = ${WEIGHTS_URL}\n` +
         `cache v   = ${V}\n`
       );
 
@@ -214,7 +309,8 @@
         "Model files OK:\n" + checks.join("\n") + "\n\nLoading model…"
       );
 
-      model = await tmAudio.load(MODEL_JSON_URL, META_JSON_URL);
+      // tmAudio is guaranteed to exist here
+      model = await window.tmAudio.load(MODEL_JSON_URL, META_JSON_URL);
 
       showStatus(
         "Model loaded.\n\n" +
@@ -250,9 +346,9 @@
           "Model not found / cannot load.\n\n" +
           (e?.message || String(e)) +
           "\n\nWhat to do:\n" +
-          "1) Open DevTools → Network, refresh, confirm model.json/metadata.json/weights.bin are 200\n" +
-          "2) Hard refresh (Ctrl+Shift+R) or change URL to ?v=100\n" +
-          "3) Ensure GitHub Pages is set to Deploy from branch: main, /(root)\n"
+          "1) DevTools → Network: confirm model.json/metadata.json/weights.bin are 200\n" +
+          "2) Disable adblock for this site (common cause of tmAudio not loading)\n" +
+          "3) Hard refresh (Ctrl+Shift+R) or change URL to ?v=101\n"
         );
         console.error(e);
       }
@@ -277,7 +373,7 @@
     // Initial state
     setPet("Stand", "Buttons");
 
-    // Try preload quietly (don’t scare user if deploy still propagating)
+    // Quiet preload (won’t throw tmAudio ReferenceError anymore)
     loadModel().catch(err => {
       console.warn(err);
       showStatus("Model not loaded yet. Click Start Listening.");
