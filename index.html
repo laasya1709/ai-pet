@@ -1,392 +1,301 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AI Pet That Learns My Voice</title>
   <style>
     :root { --border:#ddd; --muted:#555; }
     body { font-family: Arial, sans-serif; max-width: 1100px; margin: 0 auto; padding: 12px; }
-    h1 { font-size: 56px; margin: 8px 0 6px; }
-    .muted { color: var(--muted); margin: 0 0 18px; font-size: 18px; }
-    .row { display:flex; gap:18px; align-items:flex-start; }
-    .col { flex:1; min-width: 340px; }
-    .card { border: 1px solid var(--border); border-radius: 16px; padding: 18px; background: #fff; }
-    .card h2 { margin: 0 0 12px; font-size: 28px; }
-    .btn { border:1px solid #bbb; background:#fff; padding:10px 16px; border-radius: 12px; cursor:pointer; font-size: 15px; }
-    .btn:disabled { opacity:.45; cursor:not-allowed; }
-    .btn.primary { border-color:#111; }
-    .btnRow { display:flex; flex-wrap:wrap; gap:10px; }
-    .sectionTitle { font-size: 24px; font-weight:700; margin: 18px 0 10px; }
-    .status { margin-top: 10px; color:#333; }
-    .hr { height:1px; background: var(--border); margin: 14px 0; }
-    .pill { display:inline-block; border:1px solid #ddd; border-radius:999px; padding:6px 10px; margin: 6px 6px 0 0; font-size: 14px; }
-    .petBox { border:1px solid var(--border); border-radius: 16px; padding: 18px; min-height: 380px; display:flex; align-items:center; justify-content:center; }
-    #petImg { max-width: 420px; width: 100%; height: auto; }
+    h1 { font-size: 56px; margin: 6px 0 6px; }
+    p.muted { color: var(--muted); margin-top: 0; }
+    .row { display: flex; gap: 18px; align-items: flex-start; }
+    .card { border: 1px solid var(--border); border-radius: 18px; padding: 18px; flex: 1; }
+    .card h2 { margin-top: 0; font-size: 34px; }
+    button { padding: 10px 16px; border-radius: 12px; border: 1px solid #bbb; background: #fff; cursor: pointer; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btnrow { display:flex; gap:12px; flex-wrap:wrap; margin: 10px 0 14px; }
+    .pillrow { display:flex; gap:10px; flex-wrap:wrap; margin-top: 10px; }
+    .pill { border: 1px solid var(--border); border-radius: 999px; padding: 8px 12px; background:#fff; }
+    .label { display:flex; align-items:center; gap:10px; margin: 10px 0; }
+    input[type="range"] { width: 220px; }
+    .petbox { border: 1px solid var(--border); border-radius: 18px; height: 460px; display:flex; align-items:center; justify-content:center; background:#fff; }
+    #petImg { max-width: 78%; max-height: 78%; }
+    .hr { height: 1px; background: var(--border); margin: 16px 0; }
     .small { font-size: 13px; color: var(--muted); }
-    .cfg { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-top:10px; }
-    .cfg label { font-size: 13px; color: var(--muted); display:flex; gap:8px; align-items:center; }
-    input[type="range"] { width: 160px; }
-    code { background:#f6f6f6; padding:2px 6px; border-radius:6px; }
+    code { background: #f6f6f6; padding: 2px 6px; border-radius: 6px; }
   </style>
 
-  <!-- TensorFlow.js + Speech Commands (NO teachablemachine-audio dependency) -->
+  <!-- TFJS + Speech Commands (Teachable Machine compatible) -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/speech-commands@0.4.0/dist/speech-commands.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/speech-commands@0.5.4/dist/speech-commands.min.js"></script>
 </head>
 
 <body>
   <h1>AI Pet That Learns My Voice</h1>
-  <p class="muted">Commands: <b>Sit</b>, <b>Jump</b>, <b>Sleep</b>. Use the headset microphone. Buttons are the backup.</p>
+  <p class="muted"><b>Commands:</b> <b>Sit</b>, <b>Jump</b>, <b>Sleep</b>. Use the headset microphone. Buttons are the backup.</p>
 
   <div class="row">
-    <div class="col">
-      <div class="card">
-        <h2>Controls</h2>
+    <div class="card">
+      <h2>Controls</h2>
 
-        <div class="btnRow">
-          <button id="startBtn" class="btn primary">Start Listening</button>
-          <button id="stopBtn" class="btn" disabled>Stop</button>
-        </div>
+      <div class="btnrow">
+        <button id="btnStart">Start Listening</button>
+        <button id="btnStop" disabled>Stop</button>
+      </div>
 
-        <div class="cfg">
-          <label>
-            Sensitivity
-            <input id="threshold" type="range" min="0.20" max="0.95" step="0.05" value="0.50" />
-            <span id="thresholdVal" class="small">0.50</span>
-          </label>
-          <label>
-            Hold frames
-            <input id="frames" type="range" min="1" max="6" step="1" value="2" />
-            <span id="framesVal" class="small">2</span>
-          </label>
-        </div>
+      <div class="label">
+        <div style="width:110px;">Sensitivity</div>
+        <input id="thr" type="range" min="0.30" max="0.95" step="0.01" value="0.70" />
+        <div id="thrVal" style="width:50px; text-align:right;">0.70</div>
+      </div>
 
-        <div class="sectionTitle">If it’s noisy, use buttons:</div>
-        <div class="btnRow">
-          <button class="btn" data-action="sit">Sit</button>
-          <button class="btn" data-action="jump">Jump</button>
-          <button class="btn" data-action="sleep">Sleep</button>
-          <button class="btn" data-action="stand">Stand</button>
-        </div>
+      <div class="label">
+        <div style="width:110px;">Hold frames</div>
+        <input id="hold" type="range" min="1" max="12" step="1" value="4" />
+        <div id="holdVal" style="width:50px; text-align:right;">4</div>
+      </div>
 
-        <div class="sectionTitle">Live Prediction</div>
-        <div id="liveTop" class="status">Top: (not listening)</div>
-        <div id="livePills"></div>
+      <h3 style="font-size:28px; margin:18px 0 10px;">If it’s noisy, use buttons:</h3>
+      <div class="btnrow">
+        <button class="poseBtn" data-pose="Sit">Sit</button>
+        <button class="poseBtn" data-pose="Jump">Jump</button>
+        <button class="poseBtn" data-pose="Sleep">Sleep</button>
+        <button class="poseBtn" data-pose="Stand">Stand</button>
+      </div>
 
-        <div class="sectionTitle">Status</div>
-        <div id="status" class="status">Model not loaded yet. Click Start Listening.</div>
+      <h3 style="font-size:28px; margin:18px 0 10px;">Live Prediction</h3>
+      <div id="topLine">Top: —</div>
+      <div class="pillrow" id="pills"></div>
 
-        <div class="hr"></div>
-        <div class="small">
-          Setup: Put your Teachable Machine exported files either in
-          <code>./model/</code> (recommended) OR the site root:
-          <code>model.json</code>, <code>metadata.json</code>, <code>weights.bin</code>.
-        </div>
+      <h3 style="font-size:28px; margin:18px 0 10px;">Status</h3>
+      <div id="status">Model not loaded yet. Click Start Listening.</div>
+
+      <div class="hr"></div>
+      <div class="small">
+        Setup: Put your Teachable Machine exported files in <code>./model/</code>:
+        <code>model.json</code>, <code>metadata.json</code>, <code>weights.bin</code>.
+        Images in site root: <code>pet-stand.png</code>, <code>pet-sit.png</code>, <code>pet-jump.png</code>, <code>pet-sleep.png</code>.
       </div>
     </div>
 
-    <div class="col">
-      <div class="card">
-        <h2>Pet</h2>
-        <div class="petBox">
-          <img id="petImg" alt="pet" src="pet-stand.png" />
-        </div>
-        <div class="sectionTitle" id="petCaption">Standing (from Buttons)</div>
-        <div class="small">Tip: keep the mic close to the child’s mouth.</div>
+    <div class="card">
+      <h2>Pet</h2>
+      <div class="petbox">
+        <img id="petImg" src="pet-stand.png" alt="pet" />
       </div>
+      <h3 id="poseTitle" style="font-size:34px; margin:18px 0 6px;">Standing (from Buttons)</h3>
+      <div class="muted">Tip: keep the mic close to the child’s mouth.</div>
     </div>
   </div>
 
 <script>
-(() => {
-  // ---------- DOM ----------
-  const startBtn = document.getElementById('startBtn');
-  const stopBtn  = document.getElementById('stopBtn');
-  const statusEl = document.getElementById('status');
-  const petImg   = document.getElementById('petImg');
-  const petCaption = document.getElementById('petCaption');
-  const liveTop = document.getElementById('liveTop');
-  const livePills = document.getElementById('livePills');
-
-  const thresholdEl = document.getElementById('threshold');
-  const framesEl = document.getElementById('frames');
-  const thresholdVal = document.getElementById('thresholdVal');
-  const framesVal = document.getElementById('framesVal');
-
-  thresholdEl.addEventListener('input', () => thresholdVal.textContent = Number(thresholdEl.value).toFixed(2));
-  framesEl.addEventListener('input', () => framesVal.textContent = framesEl.value);
-
-  // ---------- Images ----------
-  const IMAGES = {
-    stand: 'pet-stand.png',
-    sit:   'pet-sit.png',
-    jump:  'pet-jump.png',
-    sleep: 'pet-sleep.png'
+  // ====== IMPORTANT: Your model labels are: Background Noise, Jump, Sit, Sleep, Stand ======
+  // Source: metadata.json wordLabels :contentReference[oaicite:1]{index=1}
+  const LABEL_TO_IMAGE = {
+    "Sit": "pet-sit.png",
+    "Jump": "pet-jump.png",
+    "Sleep": "pet-sleep.png",
+    "Stand": "pet-stand.png",
+    "Background Noise": "pet-stand.png" // never actively chosen, but safe fallback
   };
 
-  function setPet(action, source) {
-    if (!IMAGES[action]) action = 'stand';
-    petImg.src = IMAGES[action];
-    const label = action.charAt(0).toUpperCase() + action.slice(1);
-    petCaption.textContent = `${label} (from ${source})`;
-  }
+  const MODEL_BASE = "./model/";
+  const MODEL_URL = MODEL_BASE + "model.json";
+  const METADATA_URL = MODEL_BASE + "metadata.json";
 
-  // Buttons backup
-  document.querySelectorAll('button[data-action]').forEach(btn => {
-    btn.addEventListener('click', () => setPet(btn.dataset.action, 'Buttons'));
-  });
-
-  // ---------- Speech model ----------
   let recognizer = null;
   let isListening = false;
 
-  // Smoothing / gating so it actually triggers for real-world noisy kids
-  let lastActionTime = 0;
-  const COOLDOWN_MS = 650; // shorter = more responsive
-
-  // stability counters
-  const stableCounts = { sit:0, jump:0, sleep:0, stand:0 };
+  // Stability (debounce) state
   let lastCandidate = null;
+  let candidateCount = 0;
+  let activePose = "Stand";
 
-  // Normalize labels coming from TeachableMachine / speech-commands
-  function normLabel(s) {
-    return String(s || '')
-      .trim()
-      .toLowerCase()
-      .replace(/\s+/g, ' ');
+  const elStart = document.getElementById("btnStart");
+  const elStop = document.getElementById("btnStop");
+  const elStatus = document.getElementById("status");
+  const elTop = document.getElementById("topLine");
+  const elPills = document.getElementById("pills");
+  const elImg = document.getElementById("petImg");
+  const elPoseTitle = document.getElementById("poseTitle");
+
+  const elThr = document.getElementById("thr");
+  const elThrVal = document.getElementById("thrVal");
+  const elHold = document.getElementById("hold");
+  const elHoldVal = document.getElementById("holdVal");
+
+  function setStatus(msg) { elStatus.textContent = msg; }
+
+  function setPose(pose, source) {
+    // Normalize to exact label casing
+    const p = pose;
+    const img = LABEL_TO_IMAGE[p] || "pet-stand.png";
+
+    // Only update if changed (prevents flicker and needless DOM updates)
+    if (activePose !== p) {
+      activePose = p;
+      elImg.src = img;
+    }
+    elPoseTitle.textContent = `${p} (from ${source})`;
   }
 
-  function isBackgroundLabel(lbl) {
-    const t = normLabel(lbl);
-    return (
-      t.includes('background') ||
-      t === '_background_noise_' ||
-      t === 'background noise' ||
-      t === 'background'
-    );
+  function updatePills(scores, labels) {
+    // show top few + background
+    elPills.innerHTML = "";
+    const pairs = labels.map((lab, i) => ({ lab, score: scores[i] }));
+    pairs.sort((a, b) => b.score - a.score);
+
+    // show up to 5 pills
+    for (const p of pairs.slice(0, 5)) {
+      const pct = Math.round(p.score * 100);
+      const div = document.createElement("div");
+      div.className = "pill";
+      div.textContent = `${p.lab}: ${pct}%`;
+      elPills.appendChild(div);
+    }
+    elTop.textContent = `Top: ${pairs[0].lab} (${Math.round(pairs[0].score * 100)}%)`;
   }
 
-  function toAction(lbl) {
-    const t = normLabel(lbl);
-    if (t.includes('sit')) return 'sit';
-    if (t.includes('jump')) return 'jump';
-    if (t.includes('sleep')) return 'sleep';
+  function pickStableCommand(scores, labels) {
+    const threshold = parseFloat(elThr.value);
+    const holdFrames = parseInt(elHold.value, 10);
+
+    // Find top label
+    let topIdx = 0;
+    for (let i = 1; i < scores.length; i++) {
+      if (scores[i] > scores[topIdx]) topIdx = i;
+    }
+    const topLabel = labels[topIdx];
+    const topScore = scores[topIdx];
+
+    // Ignore background noise entirely for pose switching
+    if (topLabel === "Background Noise") {
+      lastCandidate = null;
+      candidateCount = 0;
+      return null;
+    }
+
+    // Must exceed threshold
+    if (topScore < threshold) {
+      lastCandidate = null;
+      candidateCount = 0;
+      return null;
+    }
+
+    // Debounce: require N consecutive frames of same command
+    if (topLabel === lastCandidate) {
+      candidateCount += 1;
+    } else {
+      lastCandidate = topLabel;
+      candidateCount = 1;
+    }
+
+    if (candidateCount >= holdFrames) {
+      candidateCount = 0;
+      lastCandidate = null;
+      return topLabel;
+    }
+
     return null;
   }
 
-  // Build a URL safely relative to current page (works with GitHub Pages + querystrings)
-  function u(path) {
-    return new URL(path, window.location.href).toString();
-  }
+  async function loadRecognizer() {
+    if (recognizer) return recognizer;
 
-  // Try multiple model locations so you don’t get stuck on path mistakes
-  async function createRecognizerWithFallback() {
-    // You can override with ?modelPath=model/  OR ?modelPath=.
-    const qs = new URLSearchParams(location.search);
-    const modelPathOverride = qs.get('modelPath'); // e.g. "model/" or "./model/" or "."
-    const candidates = [];
+    // Use Speech Commands custom model loader
+    recognizer = speechCommands.create(
+      "BROWSER_FFT",
+      undefined,
+      MODEL_URL,
+      METADATA_URL
+    );
 
-    if (modelPathOverride) {
-      const base = modelPathOverride.endsWith('/') ? modelPathOverride : (modelPathOverride + '/');
-      candidates.push({
-        name: `override:${base}`,
-        model: u(base + 'model.json'),
-        meta:  u(base + 'metadata.json')
-      });
-    }
+    setStatus("Loading model...");
+    await recognizer.ensureModelLoaded();
 
-    // Preferred (your repo shows /model/ folder)
-    candidates.push({ name:'./model/', model: u('./model/model.json'), meta: u('./model/metadata.json') });
-
-    // Also allow root (some of your screenshots showed root fetches)
-    candidates.push({ name:'./', model: u('./model.json'), meta: u('./metadata.json') });
-
-    let lastErr = null;
-    for (const c of candidates) {
-      try {
-        // Quick fetch check first (clearer errors than the library)
-        const [m, md] = await Promise.all([fetch(c.model), fetch(c.meta)]);
-        if (!m.ok) throw new Error(`Model HTTP ${m.status} at ${c.model}`);
-        if (!md.ok) throw new Error(`Metadata HTTP ${md.status} at ${c.meta}`);
-
-        // speechCommands.create expects model + metadata URLs
-        const r = window.speechCommands.create('BROWSER_FFT', undefined, c.model, c.meta);
-        await r.ensureModelLoaded();
-        statusEl.textContent = `Model loaded from ${c.name}. Click Start Listening.`;
-        return r;
-      } catch (e) {
-        lastErr = e;
-      }
-    }
-    throw lastErr || new Error('Unable to load model from any known location.');
-  }
-
-  async function loadModelIfNeeded() {
-    if (recognizer) return;
-    if (!window.tf || !window.speechCommands) {
-      throw new Error('Dependencies not loaded (tfjs / speech-commands). Check CDN access.');
-    }
-    recognizer = await createRecognizerWithFallback();
-
-    // Show labels for sanity
+    // Validate labels match expected (your model has 5 classes) :contentReference[oaicite:2]{index=2}
     const labels = recognizer.wordLabels();
-    // If labels are missing, you trained/exported wrong artifact
-    if (!labels || !labels.length) throw new Error('Model loaded but has no labels.');
-  }
-
-  function renderLive(labels, scores) {
-    // top
-    let topIdx = 0;
-    for (let i = 1; i < scores.length; i++) if (scores[i] > scores[topIdx]) topIdx = i;
-    liveTop.textContent = `Top: ${labels[topIdx]} (${Math.round(scores[topIdx] * 100)}%)`;
-
-    // pills
-    livePills.innerHTML = '';
-    // show first up to 6 labels
-    const pairs = labels.map((l, i) => ({ l, p: scores[i] }))
-      .sort((a,b) => b.p - a.p)
-      .slice(0, 6);
-
-    for (const p of pairs) {
-      const d = document.createElement('div');
-      d.className = 'pill';
-      d.textContent = `${p.l}: ${Math.round(p.p * 100)}%`;
-      livePills.appendChild(d);
-    }
-  }
-
-  function updateStability(candidateAction) {
-    Object.keys(stableCounts).forEach(k => stableCounts[k] = 0);
-
-    if (!candidateAction) {
-      lastCandidate = null;
-      return { stableAction: null, frames: 0 };
+    const required = ["Background Noise", "Jump", "Sit", "Sleep", "Stand"];
+    const missing = required.filter(x => !labels.includes(x));
+    if (missing.length) {
+      throw new Error("Model labels missing: " + missing.join(", ") + ". Found: " + labels.join(", "));
     }
 
-    if (candidateAction === lastCandidate) {
-      stableCounts[candidateAction] = (stableCounts[candidateAction] || 0) + 1;
-    } else {
-      lastCandidate = candidateAction;
-      stableCounts[candidateAction] = 1;
-    }
-
-    return { stableAction: candidateAction, frames: stableCounts[candidateAction] };
-  }
-
-  function maybeTrigger(labels, scores) {
-    const threshold = Number(thresholdEl.value);
-    const needFrames = Number(framesEl.value);
-
-    // pick best non-background label
-    let bestIdx = -1;
-    let bestScore = -1;
-    for (let i = 0; i < labels.length; i++) {
-      if (isBackgroundLabel(labels[i])) continue;
-      if (scores[i] > bestScore) {
-        bestScore = scores[i];
-        bestIdx = i;
-      }
-    }
-
-    if (bestIdx === -1) return;
-
-    const lbl = labels[bestIdx];
-    const action = toAction(lbl);
-
-    // Gate by probability + stability + cooldown
-    const now = Date.now();
-    if (!action) {
-      lastCandidate = null;
-      return;
-    }
-
-    // If probability is low, do not accumulate stability
-    if (bestScore < threshold) {
-      lastCandidate = null;
-      return;
-    }
-
-    // Stability frames
-    const s = updateStability(action);
-    if (s.frames < needFrames) return;
-
-    if (now - lastActionTime < COOLDOWN_MS) return;
-    lastActionTime = now;
-
-    setPet(action, 'Voice');
-    statusEl.textContent = `Heard: ${action.toUpperCase()} (score ${bestScore.toFixed(2)})`;
+    return recognizer;
   }
 
   async function startListening() {
+    if (isListening) return;
+
     try {
-      startBtn.disabled = true;
-      statusEl.textContent = 'Loading model...';
-      await loadModelIfNeeded();
-
-      statusEl.textContent = 'Requesting microphone permission...';
-      // Start
-      await recognizer.listen(result => {
-        const labels = recognizer.wordLabels();
-        const scores = result.scores;
-
-        renderLive(labels, scores);
-        maybeTrigger(labels, scores);
-
-      }, {
-        overlapFactor: 0.60,       // faster updates
-        probabilityThreshold: 0.0, // we do our own thresholding
-        includeSpectrogram: false,
-        invokeCallbackOnNoiseAndUnknown: true
-      });
-
-      isListening = true;
-      stopBtn.disabled = false;
-      startBtn.disabled = true;
-      statusEl.textContent = 'Listening... Speak: Sit / Jump / Sleep';
+      await loadRecognizer();
     } catch (e) {
-      isListening = false;
-      startBtn.disabled = false;
-      stopBtn.disabled = true;
-      const msg = (e && e.message) ? e.message : String(e);
-
-      // Clearer error text for the exact failures you had before:
-      // - blocked CDN
-      // - wrong model path
-      statusEl.textContent =
-        `Model not loaded / cannot listen.\n` +
-        `${msg}\n\n` +
-        `Fix checklist:\n` +
-        `1) Ensure model files exist in ./model/ OR root (model.json, metadata.json, weights.bin)\n` +
-        `2) Ensure GitHub Pages is enabled and you are NOT using file://\n` +
-        `3) Try hard refresh (Ctrl+F5)\n` +
-        `4) If a school network blocks CDNs, use a different network or self-host tf.min.js + speech-commands.min.js`;
+      console.error(e);
+      setStatus("Model not found / cannot load. " + e.message);
+      return;
     }
+
+    const labels = recognizer.wordLabels();
+
+    isListening = true;
+    elStart.disabled = true;
+    elStop.disabled = false;
+
+    setStatus("Listening… Speak: Sit / Jump / Sleep");
+
+    // Reset stability state
+    lastCandidate = null;
+    candidateCount = 0;
+
+    await recognizer.listen(
+      (result) => {
+        const scores = Array.from(result.scores);
+        updatePills(scores, labels);
+
+        const stableCmd = pickStableCommand(scores, labels);
+        if (stableCmd) {
+          // Apply command to pet
+          setPose(stableCmd, "Voice");
+        }
+      },
+      {
+        includeSpectrogram: false,
+        probabilityThreshold: 0.0, // we do our own threshold logic
+        invokeCallbackOnNoiseAndUnknown: true,
+        overlapFactor: 0.5
+      }
+    );
   }
 
   async function stopListening() {
-    try {
-      if (recognizer && isListening) {
-        recognizer.stopListening();
-      }
-    } finally {
-      isListening = false;
-      stopBtn.disabled = true;
-      startBtn.disabled = false;
-      statusEl.textContent = 'Stopped. Click Start Listening.';
-      liveTop.textContent = 'Top: (not listening)';
-      livePills.innerHTML = '';
-      lastCandidate = null;
-      lastActionTime = 0;
-    }
+    if (!isListening) return;
+    isListening = false;
+    elStart.disabled = false;
+    elStop.disabled = true;
+
+    try { recognizer.stopListening(); } catch (_) {}
+    setStatus("Stopped. Click Start Listening.");
   }
 
-  startBtn.addEventListener('click', startListening);
-  stopBtn.addEventListener('click', stopListening);
+  // UI wiring
+  elStart.addEventListener("click", startListening);
+  elStop.addEventListener("click", stopListening);
 
-  // Default pet pose
-  setPet('stand', 'Buttons');
-})();
+  elThr.addEventListener("input", () => elThrVal.textContent = Number(elThr.value).toFixed(2));
+  elHold.addEventListener("input", () => elHoldVal.textContent = String(elHold.value));
+
+  document.querySelectorAll(".poseBtn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const pose = btn.getAttribute("data-pose");
+      setPose(pose, "Buttons");
+    });
+  });
+
+  // Default
+  setPose("Stand", "Buttons");
+  elThrVal.textContent = Number(elThr.value).toFixed(2);
+  elHoldVal.textContent = String(elHold.value);
 </script>
 </body>
 </html>
