@@ -24,6 +24,7 @@
     .hr { height: 1px; background: var(--border); margin: 16px 0; }
     .small { font-size: 13px; color: var(--muted); }
     code { background: #f6f6f6; padding: 2px 6px; border-radius: 6px; }
+    #debug { margin-top: 8px; color: var(--muted); font-size: 13px; }
   </style>
 
   <!-- TFJS + Speech Commands -->
@@ -45,9 +46,15 @@
       </div>
 
       <div class="label">
-        <div style="width:110px;">Sensitivity</div>
-        <input id="thr" type="range" min="0.30" max="0.95" step="0.01" value="0.70" />
-        <div id="thrVal" style="width:50px; text-align:right;">0.70</div>
+        <div style="width:180px;">Confidence threshold</div>
+        <input id="thr" type="range" min="0.20" max="0.95" step="0.01" value="0.45" />
+        <div id="thrVal" style="width:50px; text-align:right;">0.45</div>
+      </div>
+
+      <div class="label">
+        <div style="width:180px;">Hold frames</div>
+        <input id="hold" type="range" min="1" max="10" step="1" value="2" />
+        <div id="holdVal" style="width:50px; text-align:right;">2</div>
       </div>
 
       <h3 style="font-size:28px; margin:18px 0 10px;">If it’s noisy, use buttons:</h3>
@@ -64,6 +71,7 @@
 
       <h3 style="font-size:28px; margin:18px 0 10px;">Status</h3>
       <div id="status">Model not loaded yet. Click Start Listening.</div>
+      <div id="debug"></div>
 
       <div class="hr"></div>
       <div class="small">
@@ -86,10 +94,7 @@
   const MODEL_URL = "./model/model.json";
   const METADATA_URL = "./model/metadata.json";
 
-  // Robust mapping (handles casing/spacing)
-  function normalizeLabel(s) {
-    return String(s || "").trim().toLowerCase();
-  }
+  function normalizeLabel(s) { return String(s || "").trim().toLowerCase(); }
 
   function labelToPose(label) {
     const L = normalizeLabel(label);
@@ -98,7 +103,7 @@
     if (L === "sleep") return "Sleep";
     if (L === "stand") return "Stand";
     if (L === "background noise") return "Background Noise";
-    return label; // fallback
+    return label;
   }
 
   const POSE_TO_IMAGE = {
@@ -110,33 +115,36 @@
 
   let recognizer = null;
   let isListening = false;
+
+  // Hold-frames state
+  let streakLabel = null;
+  let streakCount = 0;
+
+  // Current pose
   let activePose = "Stand";
 
   const elStart = document.getElementById("btnStart");
   const elStop = document.getElementById("btnStop");
   const elStatus = document.getElementById("status");
+  const elDebug = document.getElementById("debug");
   const elTop = document.getElementById("topLine");
   const elPills = document.getElementById("pills");
   const elImg = document.getElementById("petImg");
   const elPoseTitle = document.getElementById("poseTitle");
   const elThr = document.getElementById("thr");
   const elThrVal = document.getElementById("thrVal");
+  const elHold = document.getElementById("hold");
+  const elHoldVal = document.getElementById("holdVal");
 
   function setStatus(msg) { elStatus.textContent = msg; }
+  function setDebug(msg) { elDebug.textContent = msg || ""; }
 
   function setPose(pose, source) {
-    const p = pose;
-    const baseImg = POSE_TO_IMAGE[p] || "pet-stand.png";
-
-    // Force reload even if browser caches aggressively
-    const cacheBust = "v=" + Date.now();
-    elImg.src = baseImg + "?" + cacheBust;
-
-    activePose = p;
-    elPoseTitle.textContent = `${p} (from ${source})`;
-
-    // Debug: visible proof that UI update ran
-    console.log("[POSE]", p, "=>", elImg.src);
+    const baseImg = POSE_TO_IMAGE[pose] || "pet-stand.png";
+    elImg.src = baseImg + "?v=" + Date.now(); // force refresh
+    activePose = pose;
+    elPoseTitle.textContent = `${pose} (from ${source})`;
+    console.log("[POSE]", pose, "=>", elImg.src);
   }
 
   function updatePills(scores, labels) {
@@ -158,9 +166,7 @@
 
   function getTop(scores, labels) {
     let topIdx = 0;
-    for (let i = 1; i < scores.length; i++) {
-      if (scores[i] > scores[topIdx]) topIdx = i;
-    }
+    for (let i = 1; i < scores.length; i++) if (scores[i] > scores[topIdx]) topIdx = i;
     return { label: labels[topIdx], score: scores[topIdx] };
   }
 
@@ -174,12 +180,11 @@
     const labels = recognizer.wordLabels();
     console.log("[LABELS]", labels);
 
-    // Hard check: if labels missing, your uploaded model is wrong.
-    const required = ["Background Noise", "Jump", "Sit", "Sleep", "Stand"];
-    const missing = required.filter(x => !labels.includes(x));
-    if (missing.length) {
-      throw new Error("Missing labels: " + missing.join(", ") + ". Found: " + labels.join(", "));
-    }
+    // Accept either with or without Stand (some TM models don't include it)
+    const mustHave = ["Background Noise", "Jump", "Sit", "Sleep"];
+    const missing = mustHave.filter(x => !labels.includes(x));
+    if (missing.length) throw new Error("Missing labels: " + missing.join(", ") + ". Found: " + labels.join(", "));
+
     return recognizer;
   }
 
@@ -198,25 +203,59 @@
     isListening = true;
     elStart.disabled = true;
     elStop.disabled = false;
+
+    // reset streak
+    streakLabel = null;
+    streakCount = 0;
+
     setStatus("Listening… Speak: Sit / Jump / Sleep");
+    setDebug("");
 
     await recognizer.listen((result) => {
       const scores = Array.from(result.scores);
       updatePills(scores, labels);
 
       const thr = parseFloat(elThr.value);
-      const top = getTop(scores, labels);
+      const holdN = parseInt(elHold.value, 10);
 
+      const top = getTop(scores, labels);
       const pose = labelToPose(top.label);
 
-      // Ignore noise; require confidence threshold
-      if (pose === "Background Noise") return;
-      if (top.score < thr) return;
+      // Always ignore noise for controlling pet
+      if (pose === "Background Noise") {
+        streakLabel = null;
+        streakCount = 0;
+        setDebug(`Ignored: Background Noise (${Math.round(top.score*100)}%)`);
+        return;
+      }
 
-      // Switch immediately (no hold-frames logic)
+      // Track consecutive frames for the same pose
+      if (pose === streakLabel) streakCount++;
+      else {
+        streakLabel = pose;
+        streakCount = 1;
+      }
+
+      // If below threshold, do not switch yet
+      if (top.score < thr) {
+        setDebug(`Not switching: "${pose}" is ${Math.round(top.score*100)}% < threshold ${Math.round(thr*100)}% (streak ${streakCount}/${holdN})`);
+        return;
+      }
+
+      // If above threshold but not enough consecutive frames, wait
+      if (streakCount < holdN) {
+        setDebug(`Waiting: "${pose}" ${Math.round(top.score*100)}% (streak ${streakCount}/${holdN})`);
+        return;
+      }
+
+      // Switch pose
       if (pose !== activePose) {
         setPose(pose, "Voice");
+        setDebug(`Switched to "${pose}" from Voice (${Math.round(top.score*100)}%, streak ${streakCount}/${holdN})`);
+      } else {
+        setDebug(`Holding "${pose}" (${Math.round(top.score*100)}%, streak ${streakCount}/${holdN})`);
       }
+
     }, {
       includeSpectrogram: false,
       probabilityThreshold: 0.0,
@@ -232,14 +271,17 @@
     elStop.disabled = true;
     try { recognizer.stopListening(); } catch (_) {}
     setStatus("Stopped. Click Start Listening.");
+    setDebug("");
   }
 
-  // UI
+  // UI wiring
   elStart.addEventListener("click", startListening);
   elStop.addEventListener("click", stopListening);
 
   elThr.addEventListener("input", () => elThrVal.textContent = Number(elThr.value).toFixed(2));
+  elHold.addEventListener("input", () => elHoldVal.textContent = String(elHold.value));
   elThrVal.textContent = Number(elThr.value).toFixed(2);
+  elHoldVal.textContent = String(elHold.value);
 
   document.querySelectorAll(".poseBtn").forEach(btn => {
     btn.addEventListener("click", () => setPose(btn.getAttribute("data-pose"), "Buttons"));
