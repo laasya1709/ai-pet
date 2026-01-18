@@ -83,32 +83,55 @@
     - Fix: load dependencies with a fallback list (jsDelivr + unpkg).
   -->
   <script>
-    // Load a script with fallback URLs. Returns when the script is available.
-    function loadScriptWithFallback(urls, globalName) {
+    // Load a script with fallback URLs. Resolves with the URL that worked.
+    // Adds a timeout so we don't hang forever on a blocked CDN.
+    function loadScriptWithFallback(urls, globalName, timeoutMs = 12000) {
       return new Promise((resolve, reject) => {
+        // If the global is already present, skip loading.
+        if (globalName && window[globalName]) {
+          resolve('already-loaded');
+          return;
+        }
+
         let i = 0;
         const tryNext = () => {
           if (i >= urls.length) {
             reject(new Error(`Failed loading ${globalName || 'script'} from all CDNs.`));
             return;
           }
+
           const url = urls[i++];
           const s = document.createElement('script');
           s.src = url;
           s.async = true;
           s.crossOrigin = 'anonymous';
-          s.onload = () => resolve(url);
-          s.onerror = () => {
+
+          let done = false;
+          const finishOk = () => {
+            if (done) return;
+            done = true;
+            resolve(url);
+          };
+          const finishFail = () => {
+            if (done) return;
+            done = true;
             s.remove();
             tryNext();
           };
+
+          const t = setTimeout(finishFail, timeoutMs);
+          s.onload = () => {
+            clearTimeout(t);
+            finishOk();
+          };
+          s.onerror = () => {
+            clearTimeout(t);
+            finishFail();
+          };
+
           document.head.appendChild(s);
         };
-        // If the global is already present, skip loading.
-        if (globalName && window[globalName]) {
-          resolve('already-loaded');
-          return;
-        }
+
         tryNext();
       });
     }
@@ -121,7 +144,8 @@
       await loadScriptWithFallback(
         [
           'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js',
-          'https://unpkg.com/@tensorflow/tfjs@4.20.0/dist/tf.min.js'
+          'https://unpkg.com/@tensorflow/tfjs@4.20.0/dist/tf.min.js',
+          'https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.20.0/tf.min.js'
         ],
         'tf'
       );
@@ -146,6 +170,7 @@
 
     let model, recognizer;
     let isListening = false;
+    let labels = [];
     let lastLabel = null;
     let streak = 0;
 
@@ -237,7 +262,12 @@
     async function loadModel() {
       // Ensure JS deps first (this is the part that was failing for you).
       showStatus("Loading libraries…");
-      await ensureDeps();
+      const depInfo = await ensureDeps();
+      // Make sure TF is fully ready before creating the recognizer.
+      if (window.tf && typeof window.tf.ready === 'function') {
+        await window.tf.ready();
+      }
+      console.log('Dependency load results:', depInfo);
 
       showStatus("Checking model files…");
       await verifyModelFiles();
@@ -246,7 +276,7 @@
       // Teachable Machine v2 audio exports are Speech Commands compatible.
       recognizer = speechCommands.create(
         'BROWSER_FFT',
-        undefined,
+        null,
         MODEL_DIR + 'model.json',
         MODEL_DIR + 'metadata.json'
       );
@@ -274,8 +304,8 @@
           }
           if (top) considerTrigger(top.className, top.probability);
         }, {
-          // 0.75 keeps it responsive but avoids constant false triggers.
-          probabilityThreshold: 0.0,
+          // Higher threshold reduces false triggers.
+          probabilityThreshold: 0.75,
           overlapFactor: 0.5
         });
 
@@ -314,10 +344,7 @@
 
     // Initial state
     setPet("Stand", "Buttons");
-    loadModel().catch(() => {
-      // Defer showing error until user clicks Start (less scary).
-      showStatus("Model not loaded yet. Click Start Listening.");
-    });
+    showStatus("Model not loaded yet. Click Start Listening.");
   </script>
 </body>
 </html>
