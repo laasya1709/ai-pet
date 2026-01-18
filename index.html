@@ -67,7 +67,7 @@
     <div class="card">
       <h2>Pet</h2>
       <div class="petStage">
-        <img id="petImg" src="pet-stand.png" alt="AI Pet" />
+        <img id="petImg" src="pet-stand.png?v=1" alt="AI Pet" />
       </div>
       <div id="petText" style="font-size:18px; margin-top:8px;">Waiting…</div>
       <p class="muted">Tip: keep the mic close to the child’s mouth.</p>
@@ -114,20 +114,20 @@
     function setPet(action, source = "Voice") {
       elPetImg.className = "";
       if (action === "Sit") {
-        elPetImg.src = "pet-sit.png";
+        elPetImg.src = "pet-sit.png?v=1";
         elPetText.textContent = `Sitting (from ${source})`;
       } else if (action === "Jump") {
-        elPetImg.src = "pet-jump.png";
+        elPetImg.src = "pet-jump.png?v=1";
         // re-trigger animation reliably
         void elPetImg.offsetWidth;
         elPetImg.classList.add("jumpAnim");
         elPetText.textContent = `Jumping (from ${source})`;
       } else if (action === "Sleep") {
-        elPetImg.src = "pet-sleep.png";
+        elPetImg.src = "pet-sleep.png?v=1";
         elPetImg.classList.add("sleepDim");
         elPetText.textContent = `Sleeping (from ${source})`;
       } else {
-        elPetImg.src = "pet-stand.png";
+        elPetImg.src = "pet-stand.png?v=1";
         elPetText.textContent = `Standing (from ${source})`;
       }
     }
@@ -176,7 +176,10 @@
 
     async function loadModel() {
       showStatus("Checking model files…");
-      await verifyModelFiles();
+      const checks = await verifyModelFiles();
+      // checks is an array like ["model.json: HTTP 200", ...]
+      // helpful in case of caching/deploy issues
+      console.log("Model file checks:", checks);
       showStatus("Loading model…");
       model = await tmAudio.load(MODEL_DIR + "model.json", MODEL_DIR + "metadata.json");
       showStatus("Model loaded. Click Start Listening.");
