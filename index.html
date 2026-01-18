@@ -162,7 +162,10 @@
   </script>
 
   <script>
-    const MODEL_DIR = "./model/";
+    // Use absolute URLs. Some SpeechCommands builds call `new URL(x)` internally,
+    // which fails if `x` has no scheme (e.g., "./model/metadata.json").
+    // Absolute URLs avoid the "Unsupported URL scheme" error.
+    const MODEL_DIR = new URL('./model/', window.location.href).toString();
 
     // Stability controls
     const THRESHOLD = 0.82;   // raise if false triggers
