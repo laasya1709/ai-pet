@@ -78,7 +78,13 @@
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/audio@0.8/dist/teachablemachine-audio.min.js"></script>
 
   <script>
+    // Cache-buster: use ?v=99 like you're doing, otherwise timestamp
+    const V = new URLSearchParams(location.search).get("v") || String(Date.now());
+
+    // Always resolve against current page URL; works on GitHub Pages (/ai-pet/)
     const MODEL_DIR = new URL("model/", window.location.href).toString();
+    const MODEL_JSON_URL = `${MODEL_DIR}model.json?v=${encodeURIComponent(V)}`;
+    const META_JSON_URL  = `${MODEL_DIR}metadata.json?v=${encodeURIComponent(V)}`;
 
     // Stability controls
     const THRESHOLD = 0.82;   // raise if false triggers
@@ -107,27 +113,25 @@
       if (s.includes("jump")) return "Jump";
       if (s.includes("sleep")) return "Sleep";
       if (s.includes("stand")) return "Stand";
-      // If your Teachable Machine labels are exactly Sit/Jump/Sleep, this won't be used.
       return null;
     }
 
     function setPet(action, source = "Voice") {
       elPetImg.className = "";
       if (action === "Sit") {
-        elPetImg.src = "pet-sit.png?v=1";
+        elPetImg.src = "pet-sit.png?v=" + encodeURIComponent(V);
         elPetText.textContent = `Sitting (from ${source})`;
       } else if (action === "Jump") {
-        elPetImg.src = "pet-jump.png?v=1";
-        // re-trigger animation reliably
-        void elPetImg.offsetWidth;
+        elPetImg.src = "pet-jump.png?v=" + encodeURIComponent(V);
+        void elPetImg.offsetWidth; // retrigger anim
         elPetImg.classList.add("jumpAnim");
         elPetText.textContent = `Jumping (from ${source})`;
       } else if (action === "Sleep") {
-        elPetImg.src = "pet-sleep.png?v=1";
+        elPetImg.src = "pet-sleep.png?v=" + encodeURIComponent(V);
         elPetImg.classList.add("sleepDim");
         elPetText.textContent = `Sleeping (from ${source})`;
       } else {
-        elPetImg.src = "pet-stand.png?v=1";
+        elPetImg.src = "pet-stand.png?v=" + encodeURIComponent(V);
         elPetText.textContent = `Standing (from ${source})`;
       }
     }
@@ -149,7 +153,9 @@
         streak = 0;
         return;
       }
-      if (action === lastLabel) streak++; else { lastLabel = action; streak = 1; }
+      if (action === lastLabel) streak++;
+      else { lastLabel = action; streak = 1; }
+
       if (streak >= STREAK_N) {
         setPet(action, "Voice");
         streak = 0;
@@ -157,32 +163,64 @@
       }
     }
 
+    async function headOrGet(url) {
+      // Some static hosts can behave oddly with HEAD; fallback to GET
+      try {
+        const r = await fetch(url, { method: "HEAD", cache: "no-store" });
+        if (r.ok) return r;
+      } catch {}
+      return fetch(url, { method: "GET", cache: "no-store" });
+    }
+
     async function verifyModelFiles() {
-      // If you opened index.html directly (file://), fetching files may be blocked.
-      if (location.protocol === 'file:') {
+      if (location.protocol === "file:") {
         throw new Error(
           "You opened this via file://\n\n" +
-          "Browsers often block loading model files from file://\n" +
-          "Run a local web server or host it (GitHub Pages / Netlify)."
+          "Browsers block loading model files from file://.\n" +
+          "Use GitHub Pages or run a local web server."
         );
       }
 
-      const required = ["model.json", "metadata.json", "weights.bin"]; 
-      for (const f of required) {
-        const r = await fetch(MODEL_DIR + f, { cache: 'no-store' });
-        if (!r.ok) throw new Error(`Missing or not served: ${MODEL_DIR}${f} (HTTP ${r.status})`);
+      const targets = [
+        { name: "model.json",    url: MODEL_JSON_URL },
+        { name: "metadata.json", url: META_JSON_URL },
+        // weights.bin is referenced inside model.json; still check it directly:
+        { name: "weights.bin",   url: `${MODEL_DIR}weights.bin?v=${encodeURIComponent(V)}` }
+      ];
+
+      const results = [];
+      for (const t of targets) {
+        const r = await headOrGet(t.url);
+        const len = r.headers.get("content-length");
+        results.push(`${t.name}: HTTP ${r.status}${len ? ` (len ${len})` : ""} :: ${t.url}`);
+        if (!r.ok) throw new Error(`Cannot fetch ${t.name} (HTTP ${r.status}).\nURL: ${t.url}`);
       }
+      return results;
     }
 
     async function loadModel() {
-      showStatus("Checking model files…");
+      showStatus(
+        "Checking model files…\n\n" +
+        `MODEL_DIR = ${MODEL_DIR}\n` +
+        `model.json = ${MODEL_JSON_URL}\n` +
+        `metadata  = ${META_JSON_URL}\n` +
+        `cache v   = ${V}\n`
+      );
+
       const checks = await verifyModelFiles();
-      // checks is an array like ["model.json: HTTP 200", ...]
-      // helpful in case of caching/deploy issues
       console.log("Model file checks:", checks);
-      showStatus("Loading model…");
-      model = await tmAudio.load(MODEL_DIR + "model.json", MODEL_DIR + "metadata.json");
-      showStatus("Model loaded. Click Start Listening.");
+
+      showStatus(
+        "Model files OK:\n" + checks.join("\n") + "\n\nLoading model…"
+      );
+
+      model = await tmAudio.load(MODEL_JSON_URL, META_JSON_URL);
+
+      showStatus(
+        "Model loaded.\n\n" +
+        "Click Start Listening.\n" +
+        "Tip: If mic prompt doesn’t show, check browser permissions for this site."
+      );
     }
 
     async function startListening() {
@@ -191,6 +229,7 @@
         if (isListening) return;
 
         recognizer = model.createRecognizer();
+
         await recognizer.listen(async () => {
           const predictions = await model.predict(recognizer.getFrequencyData());
           renderScores(predictions);
@@ -210,10 +249,10 @@
         showStatus(
           "Model not found / cannot load.\n\n" +
           (e?.message || String(e)) +
-          "\n\nFix:\n" +
-          "1) Ensure model files are in ./model/\n" +
-          "2) Host using a web server (not file://)\n" +
-          "3) Refresh and try again."
+          "\n\nWhat to do:\n" +
+          "1) Open DevTools → Network, refresh, confirm model.json/metadata.json/weights.bin are 200\n" +
+          "2) Hard refresh (Ctrl+Shift+R) or change URL to ?v=100\n" +
+          "3) Ensure GitHub Pages is set to Deploy from branch: main, /(root)\n"
         );
         console.error(e);
       }
@@ -237,8 +276,10 @@
 
     // Initial state
     setPet("Stand", "Buttons");
-    loadModel().catch(() => {
-      // Defer showing error until user clicks Start (less scary).
+
+    // Try preload quietly (don’t scare user if deploy still propagating)
+    loadModel().catch(err => {
+      console.warn(err);
       showStatus("Model not loaded yet. Click Start Listening.");
     });
   </script>
