@@ -24,7 +24,7 @@
     .hr { height: 1px; background: var(--border); margin: 16px 0; }
     .small { font-size: 13px; color: var(--muted); }
     code { background: #f6f6f6; padding: 2px 6px; border-radius: 6px; }
-    #debug { margin-top: 8px; color: var(--muted); font-size: 13px; }
+    #debug { margin-top: 8px; color: var(--muted); font-size: 13px; white-space: pre-wrap; }
   </style>
 
   <!-- TFJS + Speech Commands -->
@@ -91,8 +91,13 @@
   </div>
 
 <script>
-  const MODEL_URL = "./model/model.json";
-  const METADATA_URL = "./model/metadata.json";
+  // IMPORTANT: make absolute HTTPS URLs (fixes "Unsupported URL scheme in metadata URL: ./model/metadata.json")
+  function absUrl(path) {
+    return new URL(path, window.location.href).href;
+  }
+
+  const MODEL_URL = absUrl("./model/model.json") + "?v=" + Date.now();
+  const METADATA_URL = absUrl("./model/metadata.json") + "?v=" + Date.now();
 
   function normalizeLabel(s) { return String(s || "").trim().toLowerCase(); }
 
@@ -144,7 +149,6 @@
     elImg.src = baseImg + "?v=" + Date.now(); // force refresh
     activePose = pose;
     elPoseTitle.textContent = `${pose} (from ${source})`;
-    console.log("[POSE]", pose, "=>", elImg.src);
   }
 
   function updatePills(scores, labels) {
@@ -173,17 +177,21 @@
   async function loadRecognizer() {
     if (recognizer) return recognizer;
 
+    setDebug(
+      "Model URL:\n" + MODEL_URL + "\n\nMetadata URL:\n" + METADATA_URL
+    );
+
     recognizer = speechCommands.create("BROWSER_FFT", undefined, MODEL_URL, METADATA_URL);
     setStatus("Loading model...");
     await recognizer.ensureModelLoaded();
 
     const labels = recognizer.wordLabels();
-    console.log("[LABELS]", labels);
 
-    // Accept either with or without Stand (some TM models don't include it)
     const mustHave = ["Background Noise", "Jump", "Sit", "Sleep"];
     const missing = mustHave.filter(x => !labels.includes(x));
-    if (missing.length) throw new Error("Missing labels: " + missing.join(", ") + ". Found: " + labels.join(", "));
+    if (missing.length) {
+      throw new Error("Missing labels: " + missing.join(", ") + ". Found: " + labels.join(", "));
+    }
 
     return recognizer;
   }
@@ -194,7 +202,6 @@
     try {
       await loadRecognizer();
     } catch (e) {
-      console.error(e);
       setStatus("Model not found / cannot load: " + e.message);
       return;
     }
@@ -204,12 +211,10 @@
     elStart.disabled = true;
     elStop.disabled = false;
 
-    // reset streak
     streakLabel = null;
     streakCount = 0;
 
     setStatus("Listening… Speak: Sit / Jump / Sleep");
-    setDebug("");
 
     await recognizer.listen((result) => {
       const scores = Array.from(result.scores);
@@ -221,7 +226,6 @@
       const top = getTop(scores, labels);
       const pose = labelToPose(top.label);
 
-      // Always ignore noise for controlling pet
       if (pose === "Background Noise") {
         streakLabel = null;
         streakCount = 0;
@@ -229,26 +233,19 @@
         return;
       }
 
-      // Track consecutive frames for the same pose
       if (pose === streakLabel) streakCount++;
-      else {
-        streakLabel = pose;
-        streakCount = 1;
-      }
+      else { streakLabel = pose; streakCount = 1; }
 
-      // If below threshold, do not switch yet
       if (top.score < thr) {
-        setDebug(`Not switching: "${pose}" is ${Math.round(top.score*100)}% < threshold ${Math.round(thr*100)}% (streak ${streakCount}/${holdN})`);
+        setDebug(`Not switching: "${pose}" ${Math.round(top.score*100)}% < threshold ${Math.round(thr*100)}% (streak ${streakCount}/${holdN})`);
         return;
       }
 
-      // If above threshold but not enough consecutive frames, wait
       if (streakCount < holdN) {
         setDebug(`Waiting: "${pose}" ${Math.round(top.score*100)}% (streak ${streakCount}/${holdN})`);
         return;
       }
 
-      // Switch pose
       if (pose !== activePose) {
         setPose(pose, "Voice");
         setDebug(`Switched to "${pose}" from Voice (${Math.round(top.score*100)}%, streak ${streakCount}/${holdN})`);
@@ -274,7 +271,6 @@
     setDebug("");
   }
 
-  // UI wiring
   elStart.addEventListener("click", startListening);
   elStop.addEventListener("click", stopListening);
 
@@ -287,7 +283,6 @@
     btn.addEventListener("click", () => setPose(btn.getAttribute("data-pose"), "Buttons"));
   });
 
-  // Default pose
   setPose("Stand", "Buttons");
 </script>
 </body>
